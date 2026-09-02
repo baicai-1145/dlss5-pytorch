@@ -132,6 +132,9 @@ class _SplitBlock(nn.Module):
         # side branch 512->6144 (layer2), fold back to 512
         s = self.side(xp)                                # (B,H,W,6144)
         s = s.reshape(B, H, W, 12, C).mean(-2)           # -> (B,H,W,512)
+        # RMSNorm on branches (架构修正: 消除 bn 链激活渐增, 见 phase4/BN_CHAIN_DIAG.md)
+        h = h / (h.pow(2).mean(-1, keepdim=True) + 1e-6).sqrt()
+        s = s / (s.pow(2).mean(-1, keepdim=True) + 1e-6).sqrt()
         return (h + s + xp).permute(0, 3, 1, 2)
 
 
