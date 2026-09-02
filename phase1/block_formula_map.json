@@ -1,0 +1,215 @@
+{
+ "_desc": "formula-verified block byte map for weights_loader",
+ "blocks": {
+  "block0": {
+   "formula": "stem=?",
+   "nbytes": "21696",
+   "note": "观测值,公式待定"
+  },
+  "block1": {
+   "formula": "20*32²+192",
+   "nbytes": "20672",
+   "note": ""
+  },
+  "block2": {
+   "formula": "20*32²+192",
+   "nbytes": "20672",
+   "note": ""
+  },
+  "block3": {
+   "formula": "20*32²+192",
+   "nbytes": "20672",
+   "note": ""
+  },
+  "block4": {
+   "formula": "swin32+2*32²",
+   "nbytes": "22720",
+   "note": "merge 32→64"
+  },
+  "block5": {
+   "formula": "15*64²+320",
+   "nbytes": "61760",
+   "note": ""
+  },
+  "block6": {
+   "formula": "15*64²+320",
+   "nbytes": "61760",
+   "note": ""
+  },
+  "block7": {
+   "formula": "15*64²+320",
+   "nbytes": "61760",
+   "note": ""
+  },
+  "block8": {
+   "formula": "swin64+2*64²-16",
+   "nbytes": "69936",
+   "note": "merge 64→128"
+  },
+  "block9": {
+   "formula": "12*128²+576",
+   "nbytes": "197184",
+   "note": ""
+  },
+  "block10": {
+   "formula": "12*128²+576",
+   "nbytes": "197184",
+   "note": ""
+  },
+  "block11": {
+   "formula": "12*128²+576",
+   "nbytes": "197184",
+   "note": ""
+  },
+  "block12": {
+   "formula": "12*128²+576",
+   "nbytes": "197184",
+   "note": ""
+  },
+  "block13": {
+   "formula": "12*128²+576",
+   "nbytes": "197184",
+   "note": ""
+  },
+  "block14": {
+   "formula": "swin128+2*128²-16",
+   "nbytes": "229936",
+   "note": "merge 128→256"
+  },
+  "block15": {
+   "formula": "swin256=?",
+   "nbytes": "689232",
+   "note": "公式未破(2^4整除性异常)"
+  },
+  "block16": {
+   "formula": "swin256=?",
+   "nbytes": "689232",
+   "note": "公式未破(2^4整除性异常)"
+  },
+  "block17": {
+   "formula": "swin256=?",
+   "nbytes": "689232",
+   "note": "公式未破(2^4整除性异常)"
+  },
+  "block18": {
+   "formula": "swin256=?",
+   "nbytes": "689232",
+   "note": "公式未破(2^4整除性异常)"
+  },
+  "block19": {
+   "formula": "swin256=?",
+   "nbytes": "689232",
+   "note": "公式未破(2^4整除性异常)"
+  },
+  "block20": {
+   "formula": "swin256=?",
+   "nbytes": "689232",
+   "note": "公式未破(2^4整除性异常)"
+  },
+  "block21": {
+   "formula": "swin256=?",
+   "nbytes": "689232",
+   "note": "公式未破(2^4整除性异常)"
+  },
+  "block22": {
+   "formula": "swin256+2*256²-16",
+   "nbytes": "820288",
+   "note": "split entry"
+  },
+  "block23": {
+   "formula": "4-layer pack",
+   "nbytes": "1968192",
+   "note": "layer0=524288 layer1=263168 layer2=917568 layer3=263168"
+  },
+  "block30": {
+   "formula": "5-layer pack",
+   "nbytes": "2492496",
+   "note": "+layer4=524304"
+  },
+  "block31": {
+   "formula": "split-swin pack",
+   "nbytes": "12587154",
+   "note": "L0=4194320 L1=4196352 L2=3145856 L3=2 L4=1050624"
+  },
+  "block32": {
+   "formula": "split-swin pack",
+   "nbytes": "12587154",
+   "note": "L0=4194320 L1=4196352 L2=3145856 L3=2 L4=1050624"
+  },
+  "block33": {
+   "formula": "split-swin pack",
+   "nbytes": "12587154",
+   "note": "L0=4194320 L1=4196352 L2=3145856 L3=2 L4=1050624"
+  },
+  "block34": {
+   "formula": "split-swin pack",
+   "nbytes": "12587154",
+   "note": "L0=4194320 L1=4196352 L2=3145856 L3=2 L4=1050624"
+  },
+  "block35": {
+   "formula": "split-swin pack",
+   "nbytes": "12587154",
+   "note": "L0=4194320 L1=4196352 L2=3145856 L3=2 L4=1050624"
+  },
+  "block36": {
+   "formula": "split-swin pack",
+   "nbytes": "12587154",
+   "note": "L0=4194320 L1=4196352 L2=3145856 L3=2 L4=1050624"
+  },
+  "block37": {
+   "formula": "split-swin pack",
+   "nbytes": "12587154",
+   "note": "L0=4194320 L1=4196352 L2=3145856 L3=2 L4=1050624"
+  },
+  "block38": {
+   "formula": "split-swin pack",
+   "nbytes": "12587154",
+   "note": "L0=4194320 L1=4196352 L2=3145856 L3=2 L4=1050624"
+  },
+  "block39": {
+   "formula": "512×1024+1024",
+   "nbytes": "525312",
+   "note": "瓶颈出口 Linear"
+  },
+  "block48": {
+   "formula": "swin256+2*256²+480",
+   "nbytes": "820784",
+   "note": "up 512→256"
+  },
+  "block56": {
+   "formula": "swin128+2*128²+224",
+   "nbytes": "230176",
+   "note": "up 256→128"
+  },
+  "block62": {
+   "formula": "swin64+2*64²+96",
+   "nbytes": "70048",
+   "note": "up 128→64"
+  },
+  "block66": {
+   "formula": "swin32+2*32²+64",
+   "nbytes": "22784",
+   "note": "up 64→32"
+  },
+  "block67": {
+   "formula": "20*32²+192",
+   "nbytes": "20672",
+   "note": ""
+  },
+  "block68": {
+   "formula": "20*32²+192",
+   "nbytes": "20672",
+   "note": ""
+  },
+  "block69": {
+   "formula": "20*32²+192",
+   "nbytes": "20672",
+   "note": ""
+  },
+  "block70": {
+   "formula": "tail",
+   "nbytes": "21808",
+   "note": "+blend_scale 2B"
+  }
+ }
+}

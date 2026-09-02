@@ -1,0 +1,38 @@
+{
+  "_description": "DLSS5 weights_blob 153-record block map. Chain-verified (152/153, tail truncated 8B). nbytes = FP8-encoded bytes (1B/param approx + embedded scales, exact layout Phase 4). Mirror symmetry 57/71; the 14 asymmetric blocks are stage-boundary (merge/up) blocks.",
+  "header": {"magic": "0x8cda732", "count_field": 19, "records": 153, "chain_ok": 152, "tail_truncated_bytes": 8},
+  "layout": [
+    {"role": "stem", "blocks": [0], "nbytes": 21696},
+    {"role": "enc_stage0_32ch", "blocks": [1, 2, 3], "nbytes_each": 20672},
+    {"role": "merge_32to64", "blocks": [4], "nbytes": 22720},
+    {"role": "enc_stage1_64ch", "blocks": [5, 6, 7], "nbytes_each": 61760},
+    {"role": "merge_64to128", "blocks": [8], "nbytes": 69936},
+    {"role": "enc_stage2_128ch", "blocks": [9, 10, 11, 12, 13], "nbytes_each": 197184},
+    {"role": "merge_128to256", "blocks": [14], "nbytes": 229936},
+    {"role": "enc_stage3_256ch", "blocks": [15, 16, 17, 18, 19, 20, 21], "nbytes_each": 689232},
+    {"role": "split_entry_256to512", "blocks": [22], "nbytes": 820288},
+    {"role": "enc_stage4_512ch", "blocks": [23, 24, 25, 26, 27, 28, 29], "nbytes_each": 1968192, "layers": {"layer0": 524288, "layer1": 263168, "layer2": 917568, "layer3": 263168}},
+    {"role": "enc_stage4_exit", "blocks": [30], "nbytes": 2492496, "layers": {"layer0": 524288, "layer1": 263168, "layer2": 917568, "layer3": 263168, "layer4": 524304}},
+    {"role": "bottleneck_split_swin", "blocks": [31, 32, 33, 34, 35, 36, 37, 38], "nbytes_each": 12587154, "layers": {"layer0": 4194320, "layer1": 4196352, "layer2": 3145856, "layer3": 2, "layer4": 1050624}},
+    {"role": "dec_stage4_entry", "blocks": [39], "nbytes": 525312},
+    {"role": "dec_stage4_512ch", "blocks": [40, 41, 42, 43, 44, 45, 46, 47], "nbytes_each": 1968192},
+    {"role": "up_512to256", "blocks": [48], "nbytes": 820784},
+    {"role": "dec_stage3_256ch", "blocks": [49, 50, 51, 52, 53, 54, 55], "nbytes_each": 689232},
+    {"role": "up_256to128", "blocks": [56], "nbytes": 230176},
+    {"role": "dec_stage2_128ch", "blocks": [57, 58, 59, 60, 61], "nbytes_each": 197184},
+    {"role": "up_128to64", "blocks": [62], "nbytes": 70048},
+    {"role": "dec_stage1_64ch", "blocks": [63, 64, 65], "nbytes_each": 61760},
+    {"role": "up_64to32", "blocks": [66], "nbytes": 22784},
+    {"role": "dec_stage0_32ch", "blocks": [67, 68, 69], "nbytes_each": 20672},
+    {"role": "tail_out", "blocks": [70], "nbytes": 21808, "extra": {"block70.layer0.blend_scale": 2}}
+  ],
+  "stage_block_counts": {"enc": [3, 3, 5, 7, 7], "bottleneck": 8, "dec": [8, 7, 5, 3, 3]},
+  "channel_progression_bytes": {"32ch": 20672, "64ch": 61760, "128ch": 197184, "256ch": 689232, "512ch": 1968192, "split": 12587154},
+  "scalar_records": {"nbytes": 2, "names": ["block31..38.layer3.layer", "block70.layer0.blend_scale"], "payload": "0x0000", "note": "bf16 zero scalars"},
+  "notes": [
+    "REPORT.md cubin names 1h_32_1/2h_64_2/4h_128_4/8h_256_8 are template instantiations, NOT total block counts; actual per-stage totals from weights are 3/3/5/7/7(+bottleneck 8)",
+    "boundary blocks b4/b8/b14/b22/b30 encode side carry merge (+downsample) weights; b39/b48/b56/b62/b66 decode side carry upsample weights",
+    "b30 vs b39 asymmetry (5 layers vs 1 layer) = down-entry vs up-exit of stage4→bottleneck",
+    "count_field=19 = 19 top-level entries? Possibly 5 enc stages + 1 bottleneck + 5 dec stages + stem + tail + vit-branch groups"
+  ]
+}
