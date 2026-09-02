@@ -136,7 +136,9 @@ def load_all():
     return by_block
 
 
-def fill_model(model, by_block, verbose=False):
+def fill_model(model, by_block, verbose=False, blob_full=None):
+    if blob_full is None:
+        blob_full = open(BLOB, 'rb').read()
     """按块角色把解码流装进 model 参数. 返回未填充参数统计."""
     import torch
     pmap = dict(model.named_parameters())
@@ -263,6 +265,15 @@ def fill_model(model, by_block, verbose=False):
     if 39 in by_block:
         main, misc = by_block[39]['layer0']
         put('bn_proj.weight', main) if 'bn_proj.weight' in pmap else None
+        # b39.layer0 = 2×(512,512,1,1) conv + 1024B fp16 gate (尾 512 值 U[0.2,0.8])
+        if 'dec_gate' in pmap:
+            import struct as _st
+            j=blob_full.find(b'block39.layer0.layer'); kk=j+len('block39.layer0.layer')
+            B39=_st.unpack_from('<Q',blob_full,kk+16)[0]
+            raw39=np.frombuffer(blob_full[kk+28+B39-1024:kk+28+B39],dtype=np.uint8)
+            g=np.frombuffer(raw39.tobytes(),dtype='<f2').astype(np.float32)
+            with torch.no_grad(): pmap['dec_gate'].copy_(torch.from_numpy(g))
+            unfilled.discard('dec_gate')
     if 70 in by_block:
         layers70 = by_block[70]
         main, misc = layers70.get('layer0',(np.zeros(0),np.zeros(0)))
@@ -298,7 +309,7 @@ def main():
     by_block = load_all()
     print(f'loaded {len(by_block)} blocks')
     m = DLSS5NetCalib().eval()
-    unfilled, stats = fill_model(m, by_block)
+    unfilled, stats = fill_model(m, by_block, blob_full=open(BLOB,'rb').read())
     print(f"filled params: {stats['filled']:,}; unfilled tensors: {len(unfilled)}/{len(list(m.named_parameters()))}")
     # 前向 (CPU 小尺寸)
     with torch.no_grad():

@@ -1,0 +1,27 @@
+/Users/baicai1145/dlss5-pytorch/phase4/semantic_fill.py:38: RuntimeWarning: invalid value encountered in cast
+  return v.astype(np.float32)
+loaded 71 blocks
+filled params: 143,917,780; unfilled tensors: 0/583
+CPU fwd: (1, 3, 64, 64) NaN=0 absmean=0.2075
+stage absmean/absmax/NaN:
+  stem        7.7400e-01   3.6040e+00 NaN=0
+  enc0        7.7400e-01   3.6040e+00 NaN=0
+  enc1        4.5049e+00   2.9653e+01 NaN=0
+  enc2        5.3884e+01   8.3807e+03 NaN=0
+  enc3        4.7877e+01   7.6692e+03 NaN=0
+  enc4        8.8219e+01   1.6870e+03 NaN=0
+  bn0         8.8341e+01   1.6861e+03 NaN=0
+  bn1         8.8441e+01   1.6865e+03 NaN=0
+  bn2         8.8520e+01   1.6878e+03 NaN=0
+  bn3         8.8537e+01   1.6882e+03 NaN=0
+  bn4         8.8615e+01   1.6886e+03 NaN=0
+  bn5         8.8627e+01   1.6888e+03 NaN=0
+  bn6         8.8613e+01   1.6903e+03 NaN=0
+  bn7         8.8667e+01   1.6892e+03 NaN=0
+  bn_proj     1.0029e+02   3.9450e+02 NaN=0
+  dec0        5.9345e+01   3.3608e+02 NaN=0
+  dec1        1.6717e+00   6.7817e+00 NaN=0
+  dec2        1.5463e+00   6.8891e+00 NaN=0
+  dec3        9.4937e-01   4.0700e+00 NaN=0
+  dec4        2.4180e-02   2.3836e-01 NaN=0
+  tail        2.0749e-01   3.7563e-01 NaN=0

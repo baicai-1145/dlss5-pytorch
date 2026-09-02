@@ -167,6 +167,7 @@ class DLSS5NetCalib(nn.Module):
         self.bn = nn.ModuleList([_SplitBlock() for _ in range(8)])
         # bn exit to dec0 width (512 stays 512)
         self.bn_proj = nn.Conv2d(512, 512, 1)
+        self.dec_gate = nn.Parameter(torch.ones(512))   # b39.layer0 尾部 1024B fp16 per-channel gate (U[0.2,0.8])
 
         # decoder (mirror) + expands
         dec = [(512, 8, 16), (256, 7, 8), (128, 5, 4), (64, 3, 2), (32, 3, 1)]
@@ -227,6 +228,7 @@ class DLSS5NetCalib(nn.Module):
         for blk in self.bn:
             x = blk(x)
         x = self.bn_proj(x)
+        x = x * self.dec_gate.view(1, -1, 1, 1)
         # decoder: dec0 at 512/H16, then expand+concat skip+fuse+stage
         x = self.dec[0](x)
         for i in range(len(self.expands)):

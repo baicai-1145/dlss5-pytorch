@@ -474,3 +474,27 @@ b30.layer4 (524,304B) 与 b39.layer0 (525,312B) 的 enc4_exit/dec4_entry 转换�
 ### MX per-matrix 自适应量化 (监督者)
 c512 块 MX 区 scale 峰值各块不同 (b23=0xD3, b40=0xC9, b47=0xD4) → 每矩阵独立量化零点。
 统一解码公式: **v = W × 2^(S − median(S) − 8)** (c32 块 median≈198 等价旧 bias=205)。
+
+
+## Mac 收官 (Phase 5.6 终版, 2025-09-02 深夜)
+
+### 双 agent 协作 + 监督者修复全记录
+| 修复 | 效果 |
+|---|---|
+| MX per-matrix median(S)-8 解码 (fwdtest 扫描确认全局最优, 比固定 bias 好 668-903×) | enc4 235750→88 |
+| b31-38 **layer4 发现** = ffwd+bias (1,050,624B 精确) 装填 | bn 链 30779→673 |
+| _SplitBlock **RMSNorm 架构修正** (fwdtest 诊断: 无归一化是渐增根因) | bn 链 673→88.3-88.7 完全平稳 |
+| b39.layer0 尾 1024B = **512 个 fp16 per-channel GATE** (U[0.2,0.8], bytearch 发现) 装填为 dec_gate | dec0 916→59.3 |
+
+### count=19 破译 (bytearch)
+头 [u32 magic][u32 0][u32 19][u32 0] — 19 = 第一条 name 长度 ("block0.layer0.layer"), parser 结构字段
+
+### 终版前向 (Mac CPU 64×64, seeded)
+enc0 0.77 | enc1 4.5 | enc2 54 | enc3 48 | enc4 88 | bn0-7 88.3→88.7 (平稳!) | bn_proj 100 | dec0 59 | dec1 1.67 | dec2 1.55 | dec3 0.95 | dec4 0.024 | tail 0.207 — **全程无 NaN, 激活有界 0.02-88**
+
+### rel_bias 结论 (fwdtest)
+blob 无 rel_bias 数据; 注入 0.02std 随机值影响 <0.01% — 零填充是正确默认
+
+### 遗留 (Phase 6, 需 Windows+RTX50)
+- b30.layer4 (524,304B = 512→1024 enc-to-bn 扩张投影) 和 b22/b48 up-proj 未装填 (模型缺对应层)
+- PSNR 终极对齐
