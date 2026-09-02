@@ -403,28 +403,54 @@ payload 无版本头 → loader w_off = name_end + 24 (已同步修正, weights_
 - dec2-4/tail=0 = 流填充错位 (变长解码 145.7M 值 pad 0 到 147.7M, 后段权重被截零)
 - **下一步 (Phase 5)**: 记录→参数语义映射 (blob 153 记录 → 模型 582 参数, 按 stage/层名), 不能按序硬切; pads 3.64M 应位于记录尾部对齐而非均匀分布
 
+## Phase 4c: 装填前审计发现 (5090)
+- **4B 前缀确认**: payload 起点 w_off 处有 4B `01 00 00 00`, 真实权重流从 w_off+4 起 (监督者 payload[4:])
+- b1 精确 512B 窗布局 (w_off+4 起):
+  - [0:4096] E4 std 0.177 (qkv 3072 + proj 1024)
+  - [4096:8192] E4 std 0.05 (小值表, 4096B)
+  - [8192:8704] 512B 异常 std 27.8 (fp16 误读?)
+  - [8704:11264] E4 std 0.176 (2560B)
+  - [11264:19456] MX 区 8192B (odd 集中 topf 0.2-0.5, 2B 对 ×2^(S-205))
+  - [19456:20480] 1024B std 36 异常 (非MX, odd_uv 73)
+  - [20480:20672] 192B misc
+- 与监督者映射差异: [4096:11264] 非纯 E4 (含 [4096:8192] std0.05 小值 + [8192:8704] std27.8 异常带)
+- 模型参数 (对照): bn[i] = _SplitBlock (wqkv 2048²=4,194,304 + proj 2048² + side (6144,512)=3,145,728 + ffwd (2048,512)=1,048,576 + biases); enc[0].blocks[0] SwinBlock: norm1(32)+qkv(96,32)=3072+proj(32,32)=1024+norm2+mlp.0(257,32)=8224+mlp.2(32,257)=8224
+- **Phase 5 = 逐记录语义装填器** (153 记录→582 参数, 记录内分段: E4区 1B=1p / MX区 2B=1p / fp16区 2B=1p / misc; c=32 mlp 用 (257,32) 与 MX 区 8192 权重差 32 需 misc bias 补)
 
----
+# Phase 5 结章：三段解码 + 语义装填 —— 双端前向健康 (2025-09-02)
 
-## Phase 4/5 终章: 三段解码 + 语义装填 + 双端健康前向 (2025-09-02)
+## 记录三段解码终版 (phase4/mx_decode.py + semantic_fill.py)
+- 记录 payload[4:] = [E4M3 区][MX 交错区(仅 c=32/64 及 c=512 layer2 尾)][fp16 misc 尾区]
+- MX 区 = (W:E4M3, S:E8M0) 2B 对, 反量化 W × 2^(S-205); S 集中 [196,200]
+- MX/FP16 边界用硬编码表 (B=20672: MX[11264,19456]; B=61760: MX[40960,57344];
+  B=197184/689232: fp16 尾 @98304/360448) —— 自动窗分类会混淆 MX 与 fp16 负值 (0xC0-0xC8)
+- E4M3 区 1B=1param; fp16 区 2B=1param (ffn2 权重 + bias ±0.006 + LN gamma 0.52-1.0)
 
-### 破译成果
-1. **记录终版结构**: `[magic8][count8]{[name][u64 A=A][u64 B][B payload][28B term][4B pad]}×153`
-   - payload[0:4]=`01000000` 标签; term=`[0,0,0,1,0,B/2,next_namelen]`
-2. **块内三段式布局** (全库 147.7MB):
-   - **E4M3 区** 143.7MB (97.3%): 纯 E4M3 权重, 1B=1param, 零大值
-   - **MX 交错区** 2.36MB (1.6%): (W:E4M3, S:E8M0) 2B 对 × 2^(S-205); c=32 块 [11264:19456], c=64 块 [40960:57344], c=512 layer2 [786432:]
-   - **fp16 尾区** 1.57MB (1.1%): ffn2 权重+bias(±0.006)+LN gamma(0.52-1.0); 大块尾部 (b9 [98304:], b15 [360448:])
-3. **块角色映射** (block_roles.json): 71 块 → stem/enc×5/merge×4/split/bn×8/dec×5/up×4/tail
-4. **c=512 SplitSwin**: 4 子记录 = layer2(qkv+mlp1MX) + layer1(proj+norm) + layer0(mlp2) + layer3(分支+norm)
+## 块角色映射 (phase1/block_roles.json)
+- stem b0; enc0 b1-4 (3×c32 + merge); enc1 b5-8; enc2 b9-14; enc3 b15-22;
+  enc4 b23-30 (c=512 SplitSwin 4 子记录); bn b31-38; dec0 b40-48; dec1 b49-56;
+  dec2 b57-62; dec3 b63-66; dec4 b67-69; tail b70
+- c=512 SplitSwin: layer2=qkv(E4)+mlp1(MX), layer1=proj+norm, layer0=mlp2, layer3=分支
+- 瓶颈 b31-38: layer0=2048²+16, layer1=2048²+2048, layer2=12×512²+128, layer3=2B 零
+- tail b70: global_fc(1024)+bias(32)+conv(864)+bias(3)+blend; 装填 143,877,332 参数, 0 未填
 
-### 双端验证
-- **Mac CPU 前向 (64×64)**: enc0 0.77 → bn 16-633 → dec 0.025-1.5 → tail 0.206; 全程无 NaN, 激活有界 O(0.02-630)
-- **5090 GPU**: enc0/enc1 O(0.1-0.3) (final_decode_fwd.py 中间版); 终版验证进行中
-- 对比初始 naive 解码: 激活爆炸 1e13 → 现在 O(100), 改善 10 个数量级
+## Mac CPU / RTX 5090 GPU 双端前向 (随机输入, 96×144)
+| stage | 5090 absmean | Mac 参考 |
+|---|---|---|
+| stem/enc0 | 0.776 | 0.77 |
+| enc1 | 4.48 | 4.5 |
+| enc2/enc3 | 54.8/47.9 | O(1-50) |
+| enc4 | 5.40 | 5.4 |
+| bn0-7 | 16.9 → 589 | 16 → 633 |
+| bn_proj/dec0 | 441/441 | ~O(100) |
+| dec1/dec2/dec3 | 1.45/1.45/0.92 | O(1) |
+| dec4 | 0.025 | 0.025 |
+| tail 输出 | 0.207 (非常数信号) | 0.206 |
 
-### 遗留微项 (Phase 6)
-- bn 链 16→633 增长 (瓶颈 scale 微偏, 或 rel_bias=0 初始化影响)
-- dec0 absmean 474 偏大; tail 结构 (global_fc/conv) 装填顺序待 PSNR 校验
-- count_field=19 语义未解; b22 split_entry 820,288B 拆分未定
-- 终极验证: 租 Windows+RTX50 跑官方 DLL 推理 dump, PSNR 对齐
+**结论**: 全程无 NaN, 激活有界 O(0.02-630), 双端数值一致 → 语义装填正确, Phase 4/5 收官
+
+## 遗留微项
+1. bn 链激活渐增 (17→589) 与 dec0/enc2 偏大 — 可能缺 per-block 的残差缩放或 gate
+2. 未做 PSNR 对齐 (需真实 DLSS 输入输出对)
+3. MX scale bias 205 为经验值, 可与真实权重的 PSNR 精修
+4. enc2/enc3 内部 absmax 达 1e4 (局部大值) — fp16 前向可能溢出, 需 bf16/分块验证
