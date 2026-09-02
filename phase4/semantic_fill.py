@@ -62,7 +62,15 @@ def classify_windows(arr, win=512):
 
 
 # 已测绘硬边界 (本地 Phase 4 实测): {块字节长 → (MX 区起, MX 区止)}
-MX_BOUND = {20672: (11264, 19456), 61760: (40960, 57344)}
+# c32: [E4 0:11264][MX 11264:19456][E4 19456:20480][misc fp16 20480:]; c64 同构尾 320B+
+# merge b4: MX [11264:19712] 尾E4 [19712:20480] misc 2208B; b8: MX [40960:57600] 尾E4 [57600:61440] misc 8464B
+MX_BOUND = {20672: (11264, 19456), 61760: (40960, 57344),
+            22720: (11264, 19712), 69936: (40960, 57600)}
+MISC_TAIL = {20672: 192, 61760: 320, 22720: 2208, 69936: 8464}
+MX_GAP = {20672: 112, 61760: 1024, 22720: 0, 69936: 0}
+E4M3_HOLE = {20672: [(8192, 8448)], 61760: [(28672, 28928)],
+             # merge 块 (B 独有): 同构布局
+             22720: [(8192, 8448)], 69936: [(28672, 28928)]}
 # c=512 SplitSwin layer2 (917,568B): MX 尾区 [786432:917560]
 MX_BOUND[917568] = (786432, 917504)  # 尾 60B 是杂讯, 65536 对精确
 # fp16 尾区起点 (大块): {字节长 → 尾区起}
@@ -76,12 +84,30 @@ def decode_record_raw(raw, total_B=None):
         return e4m3_decode(arr), fp16_decode(arr)
     if total_B in MX_BOUND:
         lo, hi = MX_BOUND[total_B]
-        main = np.concatenate([e4m3_decode(arr[:lo]),
+        misc_start = len(arr) - MISC_TAIL.get(total_B, 0)
+        gap = MX_GAP.get(total_B, 0)   # MX→E4 过渡带 (混合字节, 跳过)
+        holes = E4M3_HOLE.get(total_B, [])
+        # E4 前段 (剥内嵌 fp16 段)
+        segs, hole_vals = [], []
+        pos = 0
+        for hlo, hhi in sorted(holes):
+            if hlo > pos: segs.append(arr[pos:hlo])
+            hole_vals.append(arr[hlo:hhi]); pos = hhi
+        if pos < lo: segs.append(arr[pos:lo])
+        pre = np.concatenate([e4m3_decode(x) for x in segs]) if segs else np.zeros(0, np.float32)
+        main = np.concatenate([pre,
                                mx_decode_pairs(arr[lo:hi].reshape(-1, 2)),
-                               e4m3_decode(arr[hi:])])
-        return main, np.zeros(0, dtype=np.float32)
+                               e4m3_decode(arr[hi + gap:misc_start])])
+        misc = (np.concatenate([fp16_decode(x) for x in hole_vals] +
+                                ([fp16_decode(arr[misc_start:])] if misc_start < len(arr) else []))
+                if (hole_vals or misc_start < len(arr)) else np.zeros(0, np.float32))
+        return main, misc
     if total_B in FP16_TAIL and FP16_TAIL[total_B]:
         t0 = FP16_TAIL[total_B]
+        if total_B == 229936:  # b14/merge2: E4[0:98304]+hole+MX 混布; reduction 只用前 131072
+            return (np.concatenate([e4m3_decode(arr[:98304]),
+                                    e4m3_decode(arr[98816:160768])]),
+                    fp16_decode(arr[t0:]))
         return e4m3_decode(arr[:t0]), fp16_decode(arr[t0:])
     tags = classify_windows(arr)
     runs = []
@@ -165,6 +191,19 @@ def fill_model(model, by_block, verbose=False, blob_full=None):
     #    enc3(b15-21), split_entry(b22), dec 各层, up(b48,56,62,66), tail(b70) ——
     # 简化通用序: 每块 main 流 = [qkv | proj | mlp0 | mlp2] 权重按序, misc = norm/bias
     def fill_swin(prefix, main, misc):
+        # 权重流 = main (E4M3+MX 区); misc (fp16) = norm/bias 专用, 不混入权重
+        # c128/256 大块: main 只有 qkv+proj+ffn1, ffn2 在 fp16 misc → 需拼接但只到 mlp2 为止
+        # 用 misc 作为 mlp2 的补充源: stream = main + misc(权重部分)
+        # misc 布局 (b9): [16B零][gamma 128][小bias 24k][大值区 ffn2 权重] — 权重在大值区!
+        # misc = fp16 结构区: 小bias + gamma + 大负值区(疑似 per-tensor scaled ffn2)
+        # 权重流 = main; mlp2 若 main 不够, 用 misc 归一化段补 (std→0.02)
+        if len(misc) > 40000:
+            # c128 misc (字节): [0:512]gamma | [512:49152]小值 | [49152:82432]大值区 | [82432:] U[0,1]尾
+            # ffn2 权重流 = U[0,1] 尾 + 小值区 (跳过大值区)
+            misc_w = np.concatenate([misc[len(misc)-8208:], misc[256:24320]])
+        else:
+            misc_w = misc
+        stream = np.concatenate([main, misc_w]) if len(misc_w) else main
         q = 0
         for suffix, shape in (
             ('attn.qkv.weight', None), ('attn.proj.weight', None),
@@ -172,9 +211,8 @@ def fill_model(model, by_block, verbose=False, blob_full=None):
         ):
             pn = f'{prefix}.{suffix}'
             if pn in pmap:
-                q += put(pn, main[q:])
-        # norms/biases 从 misc (gamma 段 [112:176]-类) + 剩余 main
-        tail = np.concatenate([main[q:], misc]) if len(misc) else main[q:]
+                q += put(pn, stream[q:])
+        tail = stream[q:]
         o = 0
         for suffix in ('norm1.weight', 'norm1.bias', 'norm2.weight', 'norm2.bias',
                        'mlp.0.bias', 'mlp.2.bias', 'attn.qkv.bias', 'attn.proj.bias'):

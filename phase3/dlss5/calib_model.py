@@ -151,10 +151,13 @@ class DLSS5NetCalib(nn.Module):
 
         # stage dims & blocks (blob-calibrated); per-stage FFN ratio knob
         enc = [(32, 3, 1), (64, 3, 2), (128, 5, 4), (256, 7, 8), (512, 7, 16)]
+        # 数据驱动 FFN hidden (Phase 5.7 实测: c32→192, c64→256, c128→256, c256→384, c512→split)
+        FFN_H = {32: 192, 64: 256, 128: 256, 256: 384, 512: 892}
         self.enc = nn.ModuleList()
         self.merges = nn.ModuleList()
         for i, (dim, n, hd) in enumerate(enc):
             cfg = _swin_search(dim, n)
+            cfg["ffn_hidden"] = FFN_H[dim]
             self.enc.append(_swin_stage(dim, n, hd, cfg["ffn_hidden"],
                                         cfg["qkv_bias"], cfg["proj_bias"],
                                         cfg["ffn1_bias"], cfg["ffn2_bias"],
@@ -175,6 +178,7 @@ class DLSS5NetCalib(nn.Module):
         self.expands = nn.ModuleList()
         for i, (dim, n, hd) in enumerate(dec):
             cfg = _swin_search(dim, n)
+            cfg["ffn_hidden"] = FFN_H[dim]
             self.dec.append(_swin_stage(dim, n, hd, cfg["ffn_hidden"],
                                         cfg["qkv_bias"], cfg["proj_bias"],
                                         cfg["ffn1_bias"], cfg["ffn2_bias"],
