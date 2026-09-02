@@ -171,6 +171,9 @@ class DLSS5NetCalib(nn.Module):
         # bn exit to dec0 width (512 stays 512)
         self.bn_proj = nn.Conv2d(512, 512, 1)
         self.dec_gate = nn.Parameter(torch.ones(512))   # b39.layer0 尾部 1024B fp16 per-channel gate (U[0.2,0.8])
+        # 旁路挂载 (Phase 5.7 任务 B): 结构记录, 不参与前向 — enc4 出口 512→1024 扩张 proj 权重
+        self.enc_to_bn_pad = Pad(524288 // 4)   # b30.layer4 512×1024 E4M3 值数/4 (float32 挂载)
+        self.split_exit_pad = Pad(131072 // 4)  # b22 尾 256→512 转换矩阵 131,072B (未映射层, 挂载)
 
         # decoder (mirror) + expands
         dec = [(512, 8, 16), (256, 7, 8), (128, 5, 4), (64, 3, 2), (32, 3, 1)]

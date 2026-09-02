@@ -299,6 +299,19 @@ def fill_model(model, by_block, verbose=False, blob_full=None):
             put(f'bn.{bi}.ffwd.bias', m4[1048576:])   # 2048
             if f'bn.{bi}.gate' in pmap:
                 with torch.no_grad(): pmap[f'bn.{bi}.gate'].zero_()
+    # —— b22 尾部 256→512 转换矩阵: 挂载 split_exit_pad (原始 E[689152:820224] E4M3) ——
+    if 22 in by_block and 'split_exit_pad.p' in pmap:
+        import struct as _st2
+        j22 = blob_full.find(b'block22.layer0.layer'); k22 = j22 + len('block22.layer0.layer')
+        raw22 = np.frombuffer(blob_full[k22+28+689152 : k22+28+820224], dtype=np.uint8)
+        v22 = e4m3_decode(raw22[:pmap['split_exit_pad.p'].numel()*4])
+        put('split_exit_pad.p', v22)
+
+    # —— b30.layer4 (enc→bn 512→1024 proj): 旁路挂载 enc_to_bn_pad ——
+    if 30 in by_block and 'layer4' in by_block[30] and 'enc_to_bn_pad.p' in pmap:
+        m4, _ = by_block[30]['layer4']
+        put('enc_to_bn_pad.p', m4[:pmap['enc_to_bn_pad.p'].numel()])
+
     # —— bn_proj / tail (b39? b70) ——
     if 39 in by_block:
         main, misc = by_block[39]['layer0']

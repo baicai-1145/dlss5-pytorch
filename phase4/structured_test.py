@@ -74,6 +74,12 @@ def main():
     print('noisy   行48:', ' '.join(f'{v:.2f}' for v in noisy[0, row, 40:48]))
     print('out_noisy行48:', ' '.join(f'{v:.2f}' for v in out_noisy[0, row, 40:48]))
 
+    # 残差语义 (Phase 5.7 确认): out = input + tail_out
+    print()
+    print('--- 残差语义 out = input + tail_out ---')
+    r_noisy = noisy + out_noisy; r_clean = clean + out_clean
+    print(f'corr(in+tail, clean) = {corr(r_noisy, clean):+.4f}')
+    print(f'PSNR(in+tail, clean) = {psnr(r_noisy, clean):.2f} dB')
     np.save(os.path.join(HERE, '..', '.tmp', 'out_noisy.npy'), out_noisy)
     np.save(os.path.join(HERE, '..', '.tmp', 'out_clean.npy'), out_clean)
     print('\n输出已存 .tmp/')
