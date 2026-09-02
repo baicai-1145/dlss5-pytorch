@@ -60,6 +60,8 @@ def classify_windows(arr, win=512):
 
 # 已测绘硬边界 (本地 Phase 4 实测): {块字节长 → (MX 区起, MX 区止)}
 MX_BOUND = {20672: (11264, 19456), 61760: (40960, 57344)}
+# c=512 SplitSwin layer2 (917,568B): MX 尾区 [786432:917560]
+MX_BOUND[917568] = (786432, 917560)
 # fp16 尾区起点 (大块): {字节长 → 尾区起}
 FP16_TAIL = {197184: 98304, 689232: 360448, 229936: 147968+7968, 524288: None}
 
@@ -194,17 +196,26 @@ def fill_model(model, by_block, verbose=False):
                     m0, _ = layers.get('layer0', (np.zeros(0), np.zeros(0)))
                     m3, s3 = layers.get('layer3', (np.zeros(0), np.zeros(0)))
                     prefix = f'{net}.{si}.blocks.{bi}'
-                    q = 0
-                    for pn_suffix, src in (('attn.qkv.weight', m2), ('attn.proj.weight', m1),
-                                           ('mlp.0.weight', m2), ('mlp.2.weight', m0)):
-                        pn = f'{prefix}.{pn_suffix}'
-                        if pn in pmap and pn in unfilled:
-                            q2 = put(pn, src) if src is not None else 0
+                    # layer2 = [qkv E4 786432][MX 65536 值]; layer0 = mlp E4 524288
+                    put(f'{prefix}.attn.qkv.weight', m2)          # 前 786432 = 3×512² 精确, put 只取所需
+                    put(f'{prefix}.attn.proj.weight', m1)         # 262144 = 512²
+                    # 数据顺序对齐模型参数序: qkv←layer2前段, proj←layer1, mlp←layer0+layer2MX段+layer3
+                    mlp_stream = np.concatenate([m0, m2[786432:], m3[:262144]])
+                    put(f'{prefix}.mlp.0.weight', mlp_stream)
+                    put(f'{prefix}.mlp.2.weight', mlp_stream[456704:])
+                    put(f'{prefix}.mlp.0.bias', m1[262144:] if len(m1)>262144 else np.zeros(0)) if False else None
                     misc_all = np.concatenate([x for x in (s1, s3) if len(x)]) if (len(s1) or len(s3)) else np.zeros(0)
                     for suffix in ('norm1.weight', 'norm1.bias', 'norm2.weight', 'norm2.bias'):
                         pn = f'{prefix}.{suffix}'
                         if pn in pmap and pn in unfilled and len(misc_all):
-                            put(pn, misc_all)
+                            put(pn, misc_all)   # 原重叠消费: 4 个 norm 共用 misc 前 512 elem
+                    # mlp.2.bias (仅当 ffn2_bias=1, 如 dec0 搜索结果): 从 misc 后面 / m3 剩余取
+                    pn = f'{prefix}.mlp.2.bias'
+                    if pn in pmap and pn in unfilled:
+                        bias_src = misc_all[512:1024] if len(misc_all) >= 1024 else misc_all
+                        if len(bias_src) >= 512:
+                            put(pn, bias_src[:512])
+                        # else: 留默认零 (Kaiming init bias=0), 与兜底分支一致
                 else:
                     main, misc = layers['layer0']
                     fill_swin(f'{net}.{si}.blocks.{bi}', main, misc)

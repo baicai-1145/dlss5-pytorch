@@ -1,0 +1,57 @@
+/Users/baicai1145/dlss5-pytorch/phase4/semantic_fill.py:35: RuntimeWarning: invalid value encountered in cast
+  return v.astype(np.float32)
+[load] decoding by_block (bias=205) ...
+[load] 71 blocks  (14.2s)
+
+=== Task C: dec.0.blocks.0 fill integrity ===
+  unchanged after fill: 1/10
+    UNCHANGED std_pre=0.0000  std_post=0.0000  dec.0.blocks.0.mlp.2.bias
+  changed after fill: 9/10
+    CHANGED  std_pre=0.0000  std_post=0.1684  absmean=0.8540  dec.0.blocks.0.norm1.weight
+    CHANGED  std_pre=0.0000  std_post=0.1684  absmean=0.8540  dec.0.blocks.0.norm1.bias
+    CHANGED  std_pre=0.0198  std_post=0.0000  absmean=0.0000  dec.0.blocks.0.attn.relative_position_bias_table
+    CHANGED  std_pre=0.0200  std_post=0.0440  absmean=0.0338  dec.0.blocks.0.attn.qkv.weight
+    CHANGED  std_pre=0.0200  std_post=0.0166  absmean=0.0109  dec.0.blocks.0.attn.proj.weight
+    CHANGED  std_pre=0.0000  std_post=0.1684  absmean=0.8540  dec.0.blocks.0.norm2.weight
+    CHANGED  std_pre=0.0000  std_post=0.1684  absmean=0.8540  dec.0.blocks.0.norm2.bias
+    CHANGED  std_pre=0.0200  std_post=0.0439  absmean=0.0337  dec.0.blocks.0.mlp.0.weight
+    CHANGED  std_pre=0.0200  std_post=0.0783  absmean=0.0549  dec.0.blocks.0.mlp.2.weight
+
+=== Task A: bn0 and bn7 sub-layer trace ===
+  bn0 fwd absmean=0.2060
+    bn0.ffwd  shape=(1, 4, 4, 2048)  absmean=9.7183  absmax=4554.0742
+    bn0.wqkv  shape=(1, 4, 4, 2048)  absmean=102.2869  absmax=477.0369
+    bn0.proj  shape=(1, 4, 4, 2048)  absmean=28.8936  absmax=145.8326
+    bn0.side  shape=(1, 4, 4, 6144)  absmean=8.3374  absmax=4554.0742
+  bn7 fwd absmean=0.2060
+    bn7.ffwd  shape=(1, 4, 4, 2048)  absmean=345.9076  absmax=86814.2891
+    bn7.wqkv  shape=(1, 4, 4, 2048)  absmean=2044.3203  absmax=9757.8936
+    bn7.proj  shape=(1, 4, 4, 2048)  absmean=1019.5422  absmax=4628.7490
+    bn7.side  shape=(1, 4, 4, 6144)  absmean=321.1696  absmax=86814.2891
+  bn line for record:
+    bn0    1.6252e+01    3.8659e+02
+    bn1    3.1380e+01    3.0115e+02
+    bn2    8.2865e+01    1.3224e+03
+    bn3    2.2359e+02    4.5243e+03
+    bn4    2.4166e+02    4.3698e+03
+    bn5    2.7978e+02    6.4332e+03
+    bn6    3.3233e+02    8.6826e+03
+    bn7    6.3213e+02    1.5278e+04
+
+=== Task B: MX bias sensitivity scan ===
+  bias   enc0     enc1     enc2     enc3     enc4     bn7       dec0      dec1      tail
+  203.0  7.696e-01  4.496e+00  5.275e+01  4.792e+01  5.378e+00  6.323e+02  4.739e+02  1.575e+00  2.060e-01
+        out_absmean = 0.2060
+  204.0  7.681e-01  4.512e+00  5.396e+01  4.801e+01  5.377e+00  6.332e+02  4.746e+02  1.575e+00  2.060e-01
+        out_absmean = 0.2060
+  205.0  7.658e-01  4.508e+00  5.509e+01  4.784e+01  5.378e+00  6.331e+02  4.745e+02  1.575e+00  2.060e-01
+        out_absmean = 0.2060
+  206.0  7.694e-01  4.508e+00  5.434e+01  4.788e+01  5.378e+00  6.328e+02  4.743e+02  1.575e+00  2.060e-01
+        out_absmean = 0.2060
+  206.5  7.715e-01  4.510e+00  5.396e+01  4.789e+01  5.379e+00  6.340e+02  4.752e+02  1.575e+00  2.060e-01
+        out_absmean = 0.2060
+  207.0  7.725e-01  4.499e+00  5.362e+01  4.794e+01  5.378e+00  6.324e+02  4.740e+02  1.575e+00  2.060e-01
+        out_absmean = 0.2060
+
+[timing] total 182.3s
+[verdict C] all dec.0.blocks.0 params were written
