@@ -402,3 +402,29 @@ payload 无版本头 → loader w_off = name_end + 24 (已同步修正, weights_
 - enc2-bn7 涨至 1e2-7e3 (比旧 1e13 好 9 个数量级), bn_proj 4.4e5 (1.4e8 max), dec2-4/tail=0
 - dec2-4/tail=0 = 流填充错位 (变长解码 145.7M 值 pad 0 到 147.7M, 后段权重被截零)
 - **下一步 (Phase 5)**: 记录→参数语义映射 (blob 153 记录 → 模型 582 参数, 按 stage/层名), 不能按序硬切; pads 3.64M 应位于记录尾部对齐而非均匀分布
+
+
+---
+
+## Phase 4/5 终章: 三段解码 + 语义装填 + 双端健康前向 (2025-09-02)
+
+### 破译成果
+1. **记录终版结构**: `[magic8][count8]{[name][u64 A=A][u64 B][B payload][28B term][4B pad]}×153`
+   - payload[0:4]=`01000000` 标签; term=`[0,0,0,1,0,B/2,next_namelen]`
+2. **块内三段式布局** (全库 147.7MB):
+   - **E4M3 区** 143.7MB (97.3%): 纯 E4M3 权重, 1B=1param, 零大值
+   - **MX 交错区** 2.36MB (1.6%): (W:E4M3, S:E8M0) 2B 对 × 2^(S-205); c=32 块 [11264:19456], c=64 块 [40960:57344], c=512 layer2 [786432:]
+   - **fp16 尾区** 1.57MB (1.1%): ffn2 权重+bias(±0.006)+LN gamma(0.52-1.0); 大块尾部 (b9 [98304:], b15 [360448:])
+3. **块角色映射** (block_roles.json): 71 块 → stem/enc×5/merge×4/split/bn×8/dec×5/up×4/tail
+4. **c=512 SplitSwin**: 4 子记录 = layer2(qkv+mlp1MX) + layer1(proj+norm) + layer0(mlp2) + layer3(分支+norm)
+
+### 双端验证
+- **Mac CPU 前向 (64×64)**: enc0 0.77 → bn 16-633 → dec 0.025-1.5 → tail 0.206; 全程无 NaN, 激活有界 O(0.02-630)
+- **5090 GPU**: enc0/enc1 O(0.1-0.3) (final_decode_fwd.py 中间版); 终版验证进行中
+- 对比初始 naive 解码: 激活爆炸 1e13 → 现在 O(100), 改善 10 个数量级
+
+### 遗留微项 (Phase 6)
+- bn 链 16→633 增长 (瓶颈 scale 微偏, 或 rel_bias=0 初始化影响)
+- dec0 absmean 474 偏大; tail 结构 (global_fc/conv) 装填顺序待 PSNR 校验
+- count_field=19 语义未解; b22 split_entry 820,288B 拆分未定
+- 终极验证: 租 Windows+RTX50 跑官方 DLL 推理 dump, PSNR 对齐
