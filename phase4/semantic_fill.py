@@ -22,10 +22,13 @@ def e4m3_decode(u8):
     return sgn * np.where((e == 15) & (m == 7), 0.0, v)
 
 
-def mx_decode_pairs(pairs, bias=205):
+def mx_decode_pairs(pairs, bias=None):
+    """MX 解码: v = W × 2^(S - median(S) - 8) — per-matrix 自适应.
+    median(S) = 该矩阵量化零点 (c32≈198, c512: 201-212 每块不同);
+    -8 归一 E4M3 满幅到权重典型幅度. c32 块等价于旧 bias≈205."""
     w = e4m3_decode(pairs[:, 0])
     s = pairs[:, 1].astype(np.float64)
-    return w * np.power(2.0, s - bias)
+    return w * np.power(2.0, s - np.median(s) - 8.0)
 
 
 def fp16_decode(raw):
@@ -240,16 +243,22 @@ def fill_model(model, by_block, verbose=False):
             for pn_tail in ('norm.weight','norm.bias'):
                 pn=f'expands.{ei}.{pn_tail}'
                 if pn in pmap and len(misc): put(pn, misc)
-    # —— bottleneck (b31-38): _SplitBlock wqkv/proj/side/ffwd ← layer0/1/2 ——
+    # —— bottleneck (b31-38): _SplitBlock wqkv/proj/side/ffwd ← layer0/1/2/4 (layer4=ffwd+bias!) ——
     for bi, b in enumerate(range(31, 39)):
         if b in by_block:
             layers = by_block[b]
             m0,_ = layers.get('layer0',(np.zeros(0),np.zeros(0)))
             m1,_ = layers.get('layer1',(np.zeros(0),np.zeros(0)))
             m2,_ = layers.get('layer2',(np.zeros(0),np.zeros(0)))
-            for suf,src in (('wqkv.weight',m0),('proj.weight',m1),('side.weight',m2),('ffwd.weight',m2)):
-                pn=f'bn.{bi}.{suf}'
-                if pn in pmap and pn in unfilled: put(pn, src)
+            m4,_ = layers.get('layer4',(np.zeros(0),np.zeros(0)))  # 1050624 = ffwd 2048×512 + bias 2048
+            put(f'bn.{bi}.wqkv.weight', m0)          # 4194304 + qkv_pad16
+            put(f'bn.{bi}.proj.weight', m1)           # 4194304
+            put(f'bn.{bi}.proj.bias', m1[4194304:])   # 2048
+            put(f'bn.{bi}.side.weight', m2)           # 3145728 + side_pad128
+            put(f'bn.{bi}.ffwd.weight', m4)           # 1048576
+            put(f'bn.{bi}.ffwd.bias', m4[1048576:])   # 2048
+            if f'bn.{bi}.gate' in pmap:
+                with torch.no_grad(): pmap[f'bn.{bi}.gate'].zero_()
     # —— bn_proj / tail (b39? b70) ——
     if 39 in by_block:
         main, misc = by_block[39]['layer0']

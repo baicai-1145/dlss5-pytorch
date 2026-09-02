@@ -1,0 +1,40 @@
+=== Task 2: seeded forward at HEAD (median-8) ===
+  seed_model=42, seed_input=7
+/Users/baicai1145/dlss5-pytorch/phase4/semantic_fill.py:38: RuntimeWarning: invalid value encountered in cast
+  return v.astype(np.float32)
+  out shape=(1, 3, 64, 64) absmean=2.0514e-01 absmax=3.8480e-01 NaN=0
+  stage           absmean       absmax   NaN
+  stem         7.6999e-01   3.3363e+00     0
+  enc0         7.6999e-01   3.3363e+00     0
+  enc1         4.4788e+00   2.9615e+01     0
+  enc2         5.5006e+01   8.8271e+03     0
+  enc3         4.7902e+01   7.6895e+03     0
+  enc4         8.8220e+01   1.6876e+03     0
+  bn0          1.4089e+02   1.1453e+04     0
+  bn1          1.8486e+02   7.7272e+03     0
+  bn2          2.0960e+02   9.2765e+03     0
+  bn3          2.4124e+02   1.6080e+04     0
+  bn4          3.1365e+02   2.8154e+04     0
+  bn5          4.2533e+02   3.0857e+04     0
+  bn6          5.3822e+02   4.3028e+04     0
+  bn7          6.7263e+02   3.8082e+04     0
+  bn_proj      9.1742e+02   3.6239e+03     0
+  dec0         9.1578e+02   3.6174e+03     0
+  dec1         1.5590e+00   7.9411e+00     0
+  dec2         1.4898e+00   7.5977e+00     0
+  dec3         9.3918e-01   4.4206e+00     0
+  dec4         2.5097e-02   2.4734e-01     0
+  tail         2.0514e-01   3.8480e-01     0
+
+=== Task A: bn0 and bn7 sublayer + rel_bias ===
+  block    ffwd                wqkv                proj                side                out
+  bn0     5.887e+01/5.482e+02   9.250e+01/3.884e+02   2.775e+01/4.486e+02   1.454e+02/1.369e+05   out=1.409e+02
+  bn1     1.381e+02/1.134e+03   2.181e+02/1.119e+03   8.460e+01/5.556e+02   3.085e+02/4.405e+04   out=1.849e+02
+  bn2     1.083e+02/7.141e+02   1.587e+02/7.097e+02   6.385e+01/6.045e+02   2.376e+02/1.977e+04   out=2.096e+02
+  bn3     1.231e+02/9.280e+02   1.838e+02/7.628e+02   7.574e+01/5.968e+02   2.879e+02/8.046e+04   out=2.412e+02
+  bn4     1.868e+02/2.150e+03   3.018e+02/1.466e+03   1.223e+02/7.004e+02   4.462e+02/1.439e+05   out=3.136e+02
+  bn5     2.652e+02/2.270e+03   4.340e+02/1.865e+03   1.814e+02/7.655e+02   7.139e+02/3.233e+04   out=4.253e+02
+  bn6     2.889e+02/3.093e+03   4.831e+02/2.219e+03   2.176e+02/9.732e+02   8.160e+02/1.475e+05   out=5.382e+02
+  bn7     4.956e+02/6.568e+03   8.296e+02/3.499e+03   3.922e+02/1.849e+03   1.093e+03/6.158e+04   out=6.726e+02
+
+  --- rel_bias impact: fill_model zeroes rel_bias_table; test NON-ZERO effect ---

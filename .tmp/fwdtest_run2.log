@@ -1,0 +1,16 @@
+=== Task 2: seeded forward at HEAD (median-8) ===
+  seed_model=42, seed_input=7
+/Users/baicai1145/dlss5-pytorch/phase4/semantic_fill.py:38: RuntimeWarning: invalid value encountered in cast
+  return v.astype(np.float32)
+Traceback (most recent call last):
+  File "/Users/baicai1145/dlss5-pytorch/phase4/fwdtest.py", line 258, in <module>
+    main()
+  File "/Users/baicai1145/dlss5-pytorch/phase4/fwdtest.py", line 222, in main
+    m, _ = build_and_fill()
+           ^^^^^^^^^^^^^^^^
+  File "/Users/baicai1145/dlss5-pytorch/phase4/fwdtest.py", line 85, in build_and_fill
+    sf.fill_model(m, by_block)
+  File "/Users/baicai1145/dlss5-pytorch/phase4/semantic_fill.py", line 261, in fill_model
+    with _t.no_grad(): pmap[f'bn.{bi}.gate'].zero_()
+         ^^
+UnboundLocalError: cannot access local variable '_t' where it is not associated with a value
