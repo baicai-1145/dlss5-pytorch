@@ -454,3 +454,23 @@ payload 无版本头 → loader w_off = name_end + 24 (已同步修正, weights_
 2. 未做 PSNR 对齐 (需真实 DLSS 输入输出对)
 3. MX scale bias 205 为经验值, 可与真实权重的 PSNR 精修
 4. enc2/enc3 内部 absmax 达 1e4 (局部大值) — fp16 前向可能溢出, 需 bf16/分块验证
+
+
+## Mac 考古会话补充 (Phase 5.5, 2025-09-02 晚)
+
+### count_field=19 破译 (bytearch)
+头 16B = [u32 magic][u32 0][u32 19][u32 0] 中 19 = **第一条 name 的长度** ("block0.layer0.layer" = 19 字符)。
+name 不带 NUL 终止 → parser 必须知道长度；后续 name 长度由每条 terminator 的 next_namelen 传递。
+
+### b22 split_entry 七区图 (bytearch + 监督者交叉验证)
+[0:360448] c256 swin 主体 | [360448:360960] LN gamma | [360960:557568] ffn2 E4 | [557568:623104] MX 区 (scale 0xD0)
+| [623104:688640] proj | [688640:689152] LN | [689152:820224] 131,072B = 256→512 转换矩阵
+
+### 瓶颈 layer4 重大发现 (监督者)
+b31-38 各有第 5 子记录 layer4 (1,050,624B) = ffwd.weight (2048×512) + ffwd.bias (2048) 精确匹配!
+之前语义装填漏掉 → FFN 输出缺失 → bn 链激活渐增 30779。装填后 bn 链 673、dec0 916。
+b30.layer4 (524,304B) 与 b39.layer0 (525,312B) 的 enc4_exit/dec4_entry 转换矩阵尚未装填。
+
+### MX per-matrix 自适应量化 (监督者)
+c512 块 MX 区 scale 峰值各块不同 (b23=0xD3, b40=0xC9, b47=0xD4) → 每矩阵独立量化零点。
+统一解码公式: **v = W × 2^(S − median(S) − 8)** (c32 块 median≈198 等价旧 bias=205)。
