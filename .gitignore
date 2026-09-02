@@ -1,6 +1,18 @@
-weights_blob.bin
-split/
+# Python
 __pycache__/
 *.pyc
-.tmp/
-phase2/cubins/
+*.pyo
+
+# Large binaries (blob / cubins extracted)
+weights_blob.bin
+split/*.bin
+phase2/cubins/*.cubin
+phase2/cubins/all.bin
+
+# Base64 transfer artifacts
+/tmp/*.b64
+/tmp/bb_*
+
+# Misc
+.DS_Store
+*.tgz
