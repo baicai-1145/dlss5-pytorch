@@ -13,6 +13,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .mp_cubic_silu import MpCubicSiLU
+
 
 def window_partition(x: torch.Tensor, ws: int) -> torch.Tensor:
     """x: (B, C, H, W)  ->  windows (B*nH*nW, ws, ws, C)."""
@@ -141,7 +143,7 @@ class SwinBlock(nn.Module):
         self.norm2 = nn.LayerNorm(dim, bias="b" in ln_mode)
         hidden = ffn_hidden if ffn_hidden is not None else int(dim * mlp_ratio)
         self.mlp = nn.Sequential(
-            nn.Linear(dim, hidden, bias=ffn1_bias), nn.GELU(),
+            nn.Linear(dim, hidden, bias=ffn1_bias), MpCubicSiLU(),
             nn.Linear(hidden, dim, bias=ffn2_bias))
         self._mask_cache: dict[tuple[int, int, int], torch.Tensor] = {}
 

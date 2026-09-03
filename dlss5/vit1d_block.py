@@ -13,6 +13,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .mp_cubic_silu import MpCubicSiLU
+
 
 class ViT1DBlock(nn.Module):
     """Standard pre-LN transformer encoder block (norm -> MSA -> res, norm -> MLP -> res)."""
@@ -24,7 +26,7 @@ class ViT1DBlock(nn.Module):
         self.norm2 = nn.LayerNorm(dim)
         hidden = int(dim * mlp_ratio)
         self.ffn = nn.Sequential(
-            nn.Linear(dim, hidden), nn.GELU(), nn.Linear(hidden, dim))
+            nn.Linear(dim, hidden), MpCubicSiLU(), nn.Linear(hidden, dim))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + self.attn(self.norm1(x), self.norm1(x), self.norm1(x), need_weights=False)[0]
