@@ -16,3 +16,7 @@ phase2/cubins/all.bin
 # Misc
 .DS_Store
 *.tgz
+
+# Per-phase scratch / caches (memmaps, npz blobs, run logs)
+.tmp/
+phase4/.tmp/
