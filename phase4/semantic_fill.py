@@ -320,14 +320,62 @@ def fill_model(model, by_block, verbose=False, blob_full=None):
             else:
                 put(f'merges.{mi}.norm.weight', misc) if len(misc) else None
                 put(f'merges.{mi}.norm.bias', misc) if len(misc) else None
-    # —— expands (b48,56,62,66) ——
-    for ei, b in enumerate((48, 56, 62, 66)):
-        if b in by_block:
-            main, misc = by_block[b]['layer0']
-            put(f'expands.{ei}.expand.weight', main) if f'expands.{ei}.expand.weight' in pmap else None
-            for pn_tail in ('norm.weight','norm.bias'):
-                pn=f'expands.{ei}.{pn_tail}'
-                if pn in pmap and len(misc): put(pn, misc)
+    # —— expands (b48,56,62,66) — Phase 6.6 重测繪 (up = swin + 2c^2 fuse + γc bias):
+    #    [swin payload 含自身 fp16 misc][fuse E4 2c^2][fuse bias fp16][junk]
+    #    b48: swin E4[0:360448] misc fp16[491520:820224] fuse E4[360448:491520]
+    #         (E4 std=0.0418 健康) fuse bias[820224:820736] 256 vals (mean +0.78)
+    #    b56: swin E4[0:98304] fuse E4[98304:131072] (std=0.0540)
+    #         misc fp16[131072:229888] fuse bias[229888:230112] 112 vals
+    #    b62: swin E4[0:40960] fuse E4[66048:69632] 仅 3584/8192 vals (不完整)
+    #         misc fp16[49152:66048] fuse bias[69632:69728] 48 vals (≈零)
+    #    b66: swin E4[0:10240] fuse E4[11264:13312] (std=0.177) 2048 vals
+    #         misc fp16[13312:21504] fuse bias[22716:22780] 32 vals (mean +0.72)
+    #    fuse 输入序 [up(c) | skip(c)] — 合并序镜像 (b22 尾矩阵 256→512 同构)
+    # ——
+    UP_ZONES = {
+        48: dict(misc=(491520, 820224), fuse=(360448, 491520), bias=(820224, 820736), c=256),
+        56: dict(misc=(131072, 229888), fuse=(98304, 131072), bias=(229888, 230112), c=128),
+        62: dict(misc=(49152, 66048), fuse=(66048, 69632), bias=(69632, 69728), c=64),
+        66: dict(misc=(13312, 21504), fuse=(11264, 13312), bias=(22716, 22780), c=32),
+    }
+    _UPB = {48: 0, 56: 1, 62: 2, 66: 3}
+    for b, ei in _UPB.items():
+        z = UP_ZONES.get(b)
+        if z is None or b not in by_block:
+            continue
+        c = z['c']
+        # fuse weights: 直接从 blob 原始字节切 E4M3 区 (绕过 load_all 的通用解码)
+        if blob_full is not None:
+            j = blob_full.find(f'block{b}.layer0.layer'.encode())
+            k = j + len(f'block{b}.layer0.layer')
+            arr = np.frombuffer(blob_full[k+28:k+28+z['bias'][1]], dtype=np.uint8)
+        else:
+            arr = np.zeros(z['bias'][1], dtype=np.uint8)
+        fuse_v = e4m3_decode(arr[z['fuse'][0]:z['fuse'][1]])
+        bias_v = fp16_decode(arr[z['bias'][0]:z['bias'][1]])
+        pn = f'expands.{ei}.fuse.weight'
+        if pn in pmap and len(fuse_v) >= pmap[pn].numel():
+            put(pn, fuse_v)   # 完整 (b48/b56/b66); 不完整 (b62) 留给 Kaiming 兑底
+            fb = f'expands.{ei}.fuse.bias'
+            if fb in pmap:
+                if len(bias_v) >= pmap[fb].numel():
+                    put(fb, bias_v[:pmap[fb].numel()])
+                # else: 留给兑底 (bias=0, LN canonical 一致)
+        # norm γ/β: blob 中无法定位 expand LN(2c→) 的真实源区 — misc 头部是
+        # up 记录内部 swin 块自己的 γ1/β1 (b48 [0:256]=+0.915 与 b15 γ1=+0.884
+        # 对齐), 且 expand LN 维度 (512/256/128/64) 与头部段不匹配。
+        # 按项目先例 (b14 merges.2 / enc3, 见 Task 7a): canonical γ=1, β=0 兑底
+        # (留在 unfilled, 末尾兑底逻辑处理) — 不猜测性装填。
+    # fuse.weight 不足段 (b62 3584/8192) / expand GEMM (blob 无对应字节) →
+    # 结构占位 Kaiming 兑底, 真实信号由 fuse 携带
+    for ei in range(4):
+        for pn, pin in ((f'expands.{ei}.fuse.weight', 1),
+                        (f'expands.{ei}.expand.weight', 1)):
+            if pn in pmap and pn in unfilled:
+                p = pmap[pn]
+                with torch.no_grad():
+                    p.normal_(0.0, math.sqrt(1.0 / p.shape[1]))
+                unfilled.discard(pn); stats['filled'] += p.numel()
     # —— bottleneck (b31-38): _SplitBlock wqkv/proj/side/ffwd ← layer0/1/2/4 (layer4=ffwd+bias!) ——
     for bi, b in enumerate(range(31, 39)):
         if b in by_block:

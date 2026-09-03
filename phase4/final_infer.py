@@ -47,6 +47,7 @@ CAP_DIR = os.path.join(HERE, "..", ".tmp", "cap2_live")
 BLOB = os.path.join(HERE, "..", "weights_blob.bin")
 AMP_JSON = os.path.join(HERE, ".tmp", "amp_calib.json")
 AMP_JSON_V2 = os.path.join(HERE, ".tmp", "amp_calib_v2.json")
+AMP_JSON_V3 = os.path.join(HERE, ".tmp", "amp_calib_v3.json")
 W, H = 1920, 1050
 SIZE = 96
 STRIDE = 96            # non-overlapping sliding window
@@ -56,15 +57,19 @@ STRIDE = 96            # non-overlapping sliding window
 # Calibration loader (never hard-code the bias vector in two places).
 # ---------------------------------------------------------------------------
 
-def load_bias_calibration() -> tuple:
-    """Return (bias, gain, additive_residual_mode).
+def load_bias_calibration() -> dict:
+    """Return a calibration dict describing how to compose the final frame.
 
-    Phase 6.5 (Task 7b): if amp_calib_v2.json exists, use the additive-
-    residual composition  final = clip(proxy + g*(res+bias), 0, 1)  with
-    the calibrated tail gain. Otherwise fall back to the v1 path
-    (resolve() with model_est = res + bias), which the negative-luma
-    fallback of resolve() largely discards.
+    Phase 6.6 (Task 8c): if amp_calib_v3.json exists, use the crop-mean
+    readout  final = clip(P + sum_ch[wU*u + wV*v] + b, 0, 1)  where
+    u = per-crop residual mean, v = residual - u. Otherwise fall back to
+    v2 (additive residual + scalar gain) / v1 (frozen bias) semantics.
     """
+    if os.path.exists(AMP_JSON_V3):
+        with open(AMP_JSON_V3) as f:
+            meta = json.load(f)
+        print(f"[calib] v3 crop-mean readout: wU={meta['wU']} wV={meta['wV']} b={meta['b']}")
+        return {"mode": "cropmean", "wU": meta["wU"], "wV": meta["wV"], "b": meta["b"]}
     if os.path.exists(AMP_JSON_V2):
         with open(AMP_JSON_V2) as f:
             meta = json.load(f)
@@ -72,18 +77,22 @@ def load_bias_calibration() -> tuple:
         gain = float(meta.get("tail_gain", 1.0))
         print(f"[calib] v2: bias={bias.tolist()} gain={gain} "
               f"(additive-residual composition)")
-        return bias, gain, True
+        return {"mode": "additive", "bias": bias, "gain": gain}
     if not os.path.exists(AMP_JSON):
         print(f"[warn] {AMP_JSON} missing -- falling back to hard-coded bias")
         return (np.array([-0.2593214437365532,
                           -0.016486987471580505,
                           -0.07616311684250832], dtype=np.float32),
-                1.0, True)
+                {"mode": "additive",
+                 "bias": np.array([-0.2593214437365532,
+                                   -0.016486987471580505,
+                                   -0.07616311684250832], dtype=np.float32),
+                 "gain": 1.0})
     with open(AMP_JSON) as f:
         meta = json.load(f)
     bias = np.array(meta["frozen_bias_only"], dtype=np.float32)
     print(f"[calib] loaded frozen bias from {AMP_JSON}: {bias.tolist()} (v1 mode)")
-    return bias, 1.0, False
+    return {"mode": "additive", "bias": bias, "gain": 1.0}
 
 
 # ---------------------------------------------------------------------------
@@ -113,27 +122,31 @@ def load_motion_raw(name: str) -> np.ndarray:
 # ---------------------------------------------------------------------------
 
 def forward_sliding_window(
-    model, color, depth, mv, out_path: str,
-    bias: np.ndarray, gain: float = 1.0, additive: bool = True,
+    model, color, depth, mv, out_path: str, calib: dict,
     white_point: float = 1.0, passthrough: bool = True,
 ) -> np.ndarray:
-    """Run the replica on every 96x96 window of the frame, write to a
-    memmap at out_path, return the in-memory-mapped array (lazy).
+    """Run the replica on every 96x96 window of the frame, compose the
+    final frame per the calibration dict, write to a memmap at out_path.
 
-    Phase 6.5 (Task 7b): additive=True composes the final frame as
-      final = clip(proxy + gain * (res + bias), 0, 1)
-    (the tail head emits a residual delta; feeding res+bias into resolve()
-    as a frame estimate trips the negative-luma fallback and discards the
-    model output). additive=False keeps the legacy resolve() path.
+    Modes (Phase 6.5/6.6):
+      cropmean : final = clip(P + sum_ch[wU*u + wV*v] + b, 0, 1)
+                 u = per-crop residual mean (broadcast), v = residual - u
+      additive : final = clip(proxy + gain*(res + bias), 0, 1)
+      resolve  : legacy — bias-only then resolve() as a frame estimate
+                 (negative-luma fallback discards the model output)
     """
+    mode = calib["mode"]
     n_rows = (H - SIZE) // STRIDE + 1     # 11
     n_cols = (W - SIZE) // STRIDE + 1     # 20
     n_crops = n_rows * n_cols
-    print(f"  sliding window: {n_rows} rows x {n_cols} cols = {n_crops} crops")
+    print(f"  sliding window: {n_rows} rows x {n_cols} cols = {n_crops} crops (mode={mode})")
 
     # memmap the full output -- never loaded as a contiguous in-RAM array
     final = np.lib.format.open_memmap(
         out_path, mode="w+", dtype=np.float32, shape=(H, W, 3))
+    # raw residual store for crop-mean modes
+    if mode == "cropmean":
+        resid = np.zeros((H, W, 3), dtype=np.float32)
 
     crops = []
     for yi in range(n_rows):
@@ -157,12 +170,15 @@ def forward_sliding_window(
                 torch.from_numpy(rgb).float(),
             )[0].numpy().astype(np.float32)             # (3, S, S)
 
-        # Phase 6.5 (Task 7b): additive-residual composition
-        #   final = clip(proxy + gain*(res + bias), 0, 1)
+        # Phase 6.5/6.6 composition
         proxy = rgb.transpose(0, 2, 3, 1)[0]                # (S, S, 3)
-        if additive:
-            delta = res + bias.reshape(3, 1, 1)
-            final_crop = np.clip(proxy + gain * np.transpose(delta, (1, 2, 0)), 0.0, 1.0)
+        res_chw = np.transpose(res, (1, 2, 0))              # (S, S, 3)
+        if mode == "cropmean":
+            resid[y:y + SIZE, x:x + SIZE] = res_chw
+            final_crop = None                                # composed after the loop
+        elif mode == "additive":
+            delta = res + calib["bias"].reshape(3, 1, 1)
+            final_crop = np.clip(proxy + calib["gain"] * np.transpose(delta, (1, 2, 0)), 0.0, 1.0)
         else:
             # legacy: bias-only then resolve() as a frame estimate
             res = res + bias.reshape(3, 1, 1)
@@ -180,6 +196,21 @@ def forward_sliding_window(
         if (k + 1) % 50 == 0 or k == n_crops - 1:
             print(f"    crop {k + 1}/{n_crops} "
                   f"({(time.time() - t0) / (k + 1):.2f}s/crop)")
+
+    if mode == "cropmean":
+        wU = np.array(calib["wU"], dtype=np.float32)
+        wV = np.array(calib["wV"], dtype=np.float32)
+        b = np.array(calib["b"], dtype=np.float32)
+        print("  composing crop-mean readout ...")
+        for yi in range(n_rows):
+            for xi in range(n_cols):
+                y, x = yi * STRIDE, xi * STRIDE
+                rc = resid[y:y + SIZE, x:x + SIZE]
+                u = rc.mean(axis=(0, 1))
+                v = rc - u
+                pred = np.stack([wU[ch] * u[ch] + wV[ch] * v[..., ch] for ch in range(3)], -1) + b
+                final[y:y + SIZE, x:x + SIZE] = np.clip(
+                    color[y:y + SIZE, x:x + SIZE] + pred, 0.0, 1.0)
     final.flush()
     return final
 
@@ -241,7 +272,7 @@ def main():
 
     os.makedirs(os.path.dirname(args.out_npy), exist_ok=True)
 
-    bias, gain, additive = load_bias_calibration()
+    calib = load_bias_calibration()
 
     print(f"loading frame {args.frame} ...")
     bef = load_rgb10a2(f"{os.path.join(CAP_DIR, f'model_input_{args.frame:02d}.raw')}")
@@ -262,8 +293,7 @@ def main():
     print(f"  ready in {time.time() - t0:.0f}s")
 
     print("running sliding-window forward + calibration + composition ...")
-    final = forward_sliding_window(model, bef, dep, mv, args.out_npy, bias,
-                                   gain=gain, additive=additive)
+    final = forward_sliding_window(model, bef, dep, mv, args.out_npy, calib)
 
     # ---- full-frame metrics ----------------------------------------------
     # Only the [0:H-stride, 0:W-stride] sub-rectangle is fully covered by

@@ -32,7 +32,7 @@ import torch.nn.functional as F
 
 from .blob_budget import STAGE_TARGET, STAGE_ORDER
 from .swin_block import SwinStage
-from .patch_ops import PatchMerging, PatchExpanding
+from .patch_ops import PatchMerging, PatchExpanding, UpFuse
 
 
 @dataclass
@@ -175,7 +175,8 @@ class DLSS5NetCalib(nn.Module):
         self.enc_to_bn_pad = Pad(524288 // 4)   # b30.layer4 512×1024 E4M3 值数/4 (float32 挂载)
         self.split_exit_pad = Pad(131072 // 4)  # b22 尾 256→512 转换矩阵 131,072B (未映射层, 挂载)
 
-        # decoder (mirror) + expands
+        # decoder (mirror) + expands (Phase 6.6: UpFuse = expand + trained
+        # 2c^2 fuse GEMM over concat([up(x), skip]) — official up-record layout)
         dec = [(512, 8, 16), (256, 7, 8), (128, 5, 4), (64, 3, 2), (32, 3, 1)]
         self.dec = nn.ModuleList()
         self.expands = nn.ModuleList()
@@ -188,7 +189,7 @@ class DLSS5NetCalib(nn.Module):
                                         cfg["ln_mode"], cfg["rel_bias"]))
             if i < len(dec) - 1:
                 lo = dec[i + 1][0]
-                self.expands.append(PatchExpanding(dim, lo))
+                self.expands.append(UpFuse(dim, lo))
         self.tail = _ResidualHead(32, 3, 21810)
         # global calibration pad: absorb (blob_total - model_total) so that total
         # parameters == 147,683,760 exactly (byte-accurate skeleton; Phase 4 maps
@@ -239,20 +240,15 @@ class DLSS5NetCalib(nn.Module):
         # decoder: dec0 at 512/H16, then expand+concat skip+fuse+stage
         x = self.dec[0](x)
         for i in range(len(self.expands)):
-            x = self.expands[i](x)
             sk = skips[-(i + 1)]
-            # fuse skip: 1x1 conv to match after concat
-            if x.shape[2:] != sk.shape[2:]:
-                x = F.interpolate(x, size=sk.shape[2:], mode="bilinear", align_corners=False)
-            x = torch.cat([x, sk], 1)
-            lo = self.dec[i + 1].dim
-            x = F.conv2d(x, self._fuse_w(i, lo), bias=None) if False else x
-            x = x[:, :lo]
+            x = self.expands[i](x, sk)   # Phase 6.6: fuse GEMM over [up(x) | skip]
             x = self.dec[i + 1](x)
         out = self.tail(x)
         return out[:, :, :H0, :W0]
 
     def _fuse_w(self, i, lo):
+        # legacy placeholder (unused since Phase 6.6: UpFuse carries the
+        # trained 2c^2 fuse GEMM); kept for checkpoint compatibility.
         return torch.ones(lo, 2 * lo, 1, 1, device=next(self.parameters()).device)
 
 
