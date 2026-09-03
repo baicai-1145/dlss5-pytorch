@@ -18,8 +18,13 @@ DEFAULT_GAIN = 0.8
 # Phase 7 output-head calibration (full-frame affine fit on frame 0, validated 8/8):
 #   official_delta ≈ A * replica_delta + B  (per channel, linear domain)
 # Raises PSNR 9.36 -> 11.38 dB on held-out frames. See .tmp/diag_full.py protocol.
-DEFAULT_OUT_AFFINE_A = np.array([0.11124780, 6.15148878, 1.12952542], dtype=np.float32)
-DEFAULT_OUT_AFFINE_B = np.array([-0.21836868, 2.24499130, 0.17110443], dtype=np.float32)
+#
+# MpCubicSiLU build (9c862b8): refit on frame 0 -> 8.65 -> 11.24 dB mean (8/8 frames).
+# Old GELU-era values kept below for reference:
+#   A_old = [0.11124780, 6.15148878, 1.12952542]
+#   B_old = [-0.21836868, 2.24499130, 0.17110443]
+DEFAULT_OUT_AFFINE_A = np.array([0.14192201, 5.80090714, 0.17850228], dtype=np.float32)
+DEFAULT_OUT_AFFINE_B = np.array([-0.22792111, 2.09527826, -0.27723265], dtype=np.float32)
 
 
 def apply_out_affine(
