@@ -46,6 +46,7 @@ from phase4.resolve_shader import load_rgb10a2, resolve
 CAP_DIR = os.path.join(HERE, "..", ".tmp", "cap2_live")
 BLOB = os.path.join(HERE, "..", "weights_blob.bin")
 AMP_JSON = os.path.join(HERE, ".tmp", "amp_calib.json")
+AMP_JSON_V2 = os.path.join(HERE, ".tmp", "amp_calib_v2.json")
 W, H = 1920, 1050
 SIZE = 96
 STRIDE = 96            # non-overlapping sliding window
@@ -55,17 +56,34 @@ STRIDE = 96            # non-overlapping sliding window
 # Calibration loader (never hard-code the bias vector in two places).
 # ---------------------------------------------------------------------------
 
-def load_bias_calibration() -> np.ndarray:
+def load_bias_calibration() -> tuple:
+    """Return (bias, gain, additive_residual_mode).
+
+    Phase 6.5 (Task 7b): if amp_calib_v2.json exists, use the additive-
+    residual composition  final = clip(proxy + g*(res+bias), 0, 1)  with
+    the calibrated tail gain. Otherwise fall back to the v1 path
+    (resolve() with model_est = res + bias), which the negative-luma
+    fallback of resolve() largely discards.
+    """
+    if os.path.exists(AMP_JSON_V2):
+        with open(AMP_JSON_V2) as f:
+            meta = json.load(f)
+        bias = np.array(meta["frozen_bias_only"], dtype=np.float32)
+        gain = float(meta.get("tail_gain", 1.0))
+        print(f"[calib] v2: bias={bias.tolist()} gain={gain} "
+              f"(additive-residual composition)")
+        return bias, gain, True
     if not os.path.exists(AMP_JSON):
         print(f"[warn] {AMP_JSON} missing -- falling back to hard-coded bias")
-        return np.array([-0.2593214437365532,
-                         -0.016486987471580505,
-                         -0.07616311684250832], dtype=np.float32)
+        return (np.array([-0.2593214437365532,
+                          -0.016486987471580505,
+                          -0.07616311684250832], dtype=np.float32),
+                1.0, True)
     with open(AMP_JSON) as f:
         meta = json.load(f)
     bias = np.array(meta["frozen_bias_only"], dtype=np.float32)
-    print(f"[calib] loaded frozen bias from {AMP_JSON}: {bias.tolist()}")
-    return bias
+    print(f"[calib] loaded frozen bias from {AMP_JSON}: {bias.tolist()} (v1 mode)")
+    return bias, 1.0, False
 
 
 # ---------------------------------------------------------------------------
@@ -96,10 +114,18 @@ def load_motion_raw(name: str) -> np.ndarray:
 
 def forward_sliding_window(
     model, color, depth, mv, out_path: str,
-    bias: np.ndarray, white_point: float = 1.0, passthrough: bool = True,
+    bias: np.ndarray, gain: float = 1.0, additive: bool = True,
+    white_point: float = 1.0, passthrough: bool = True,
 ) -> np.ndarray:
     """Run the replica on every 96x96 window of the frame, write to a
-    memmap at out_path, return the in-memory-mapped array (lazy)."""
+    memmap at out_path, return the in-memory-mapped array (lazy).
+
+    Phase 6.5 (Task 7b): additive=True composes the final frame as
+      final = clip(proxy + gain * (res + bias), 0, 1)
+    (the tail head emits a residual delta; feeding res+bias into resolve()
+    as a frame estimate trips the negative-luma fallback and discards the
+    model output). additive=False keeps the legacy resolve() path.
+    """
     n_rows = (H - SIZE) // STRIDE + 1     # 11
     n_cols = (W - SIZE) // STRIDE + 1     # 20
     n_crops = n_rows * n_cols
@@ -131,24 +157,26 @@ def forward_sliding_window(
                 torch.from_numpy(rgb).float(),
             )[0].numpy().astype(np.float32)             # (3, S, S)
 
-        # bias-only calibration: delta_hat = res + b
-        res = res + bias.reshape(3, 1, 1)
-
-        # resolve composition: with passthrough=1 and original==proxy (the
-        # cap2_live path), the forward composition collapses; we use the
-        # general resolve() function for safety. original == proxy here.
-        proxy = rgb.transpose(0, 2, 3, 1)[0]            # (S, S, 3)
-        composed = resolve(
-            proxy.astype(np.float32),
-            np.transpose(res, (1, 2, 0)),                 # (S, S, 3) for resolve
-            proxy.astype(np.float32),
-            white_point=white_point,
-            transfer_strength=1.0,
-            colour_strength=1.0,
-            max_ratio=2.0,
-            passthrough=passthrough,
-        )
-        final[y:y + SIZE, x:x + SIZE] = composed
+        # Phase 6.5 (Task 7b): additive-residual composition
+        #   final = clip(proxy + gain*(res + bias), 0, 1)
+        proxy = rgb.transpose(0, 2, 3, 1)[0]                # (S, S, 3)
+        if additive:
+            delta = res + bias.reshape(3, 1, 1)
+            final_crop = np.clip(proxy + gain * np.transpose(delta, (1, 2, 0)), 0.0, 1.0)
+        else:
+            # legacy: bias-only then resolve() as a frame estimate
+            res = res + bias.reshape(3, 1, 1)
+            final_crop = resolve(
+                proxy.astype(np.float32),
+                np.transpose(res, (1, 2, 0)),                 # (S, S, 3) for resolve
+                proxy.astype(np.float32),
+                white_point=white_point,
+                transfer_strength=1.0,
+                colour_strength=1.0,
+                max_ratio=2.0,
+                passthrough=passthrough,
+            )
+        final[y:y + SIZE, x:x + SIZE] = final_crop
         if (k + 1) % 50 == 0 or k == n_crops - 1:
             print(f"    crop {k + 1}/{n_crops} "
                   f"({(time.time() - t0) / (k + 1):.2f}s/crop)")
@@ -208,12 +236,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--frame", type=int, default=0)
     ap.add_argument("--out-npy", default=os.path.join(HERE, ".tmp", "final_frame0.npy"))
-    ap.add_argument("--out-vis", default=os.path.join(HERE, ".tmp", "final_vis.png"))
+    ap.add_argument("--out-vis", default=os.path.join(HERE, ".tmp", "final_vis_v2.png"))
     args = ap.parse_args()
 
     os.makedirs(os.path.dirname(args.out_npy), exist_ok=True)
 
-    bias = load_bias_calibration()
+    bias, gain, additive = load_bias_calibration()
 
     print(f"loading frame {args.frame} ...")
     bef = load_rgb10a2(f"{os.path.join(CAP_DIR, f'model_input_{args.frame:02d}.raw')}")
@@ -233,8 +261,9 @@ def main():
     fill_model(model, by, blob_full=open(BLOB, "rb").read())
     print(f"  ready in {time.time() - t0:.0f}s")
 
-    print("running sliding-window forward + bias-only calibration + resolve ...")
-    final = forward_sliding_window(model, bef, dep, mv, args.out_npy, bias)
+    print("running sliding-window forward + calibration + composition ...")
+    final = forward_sliding_window(model, bef, dep, mv, args.out_npy, bias,
+                                   gain=gain, additive=additive)
 
     # ---- full-frame metrics ----------------------------------------------
     # Only the [0:H-stride, 0:W-stride] sub-rectangle is fully covered by

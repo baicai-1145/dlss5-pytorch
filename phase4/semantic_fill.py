@@ -5,7 +5,7 @@
   → qkv+proj (E4 前段) + mlp0/mlp2 (E4 中后段+MX) + norm/bias (misc fp16)
 c=512 SplitSwin 块 (4 子记录) 与瓶颈 (4 子记录) 按专属布局.
 """
-import sys, os, json, struct
+import sys, os, json, struct, math
 import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -75,6 +75,17 @@ E4M3_HOLE = {20672: [(8192, 8448)], 61760: [(28672, 28928)],
 MX_BOUND[917568] = (786432, 917504)  # 尾 60B 是杂讯, 65536 对精确
 # fp16 尾区起点 (大块): {字节长 → 尾区起}
 FP16_TAIL = {197184: 98304, 689232: 360448, 229936: 147968+7968, 524288: None}
+
+# Phase 6.5 (Task 7a) — b14 (merges.2) misc 修复:
+# 旧边界 FP16_TAIL[229936]=155936 把 b14 尾部的 MX scale 因子表 (前 512 个
+# fp16 值, mean=-8.78, std=2.21) 误当成 LN gamma 装进 merges.2.norm.{weight,bias},
+# 造成 enc3 段 14× 幅度跳变 (enc2 std 1.55 → enc3 21.7)。
+# 证据链: phase4/enc3_probe.py + ENC3_PROBE_REPORT.md。
+# 修复: b14 的 misc 起点后移到 MX scale 表之后 (155936 + 1024 字节 = 512 fp16 值),
+# 并在装填侧对 merges.2.norm 用健康带 1.0 兑底 (blob 里未找到该 merge 的
+# 真实 gamma 区段, 兑底值与 LN canonical init 一致)。
+B14_MXSCALE_BYTES = 1024   # 512 fp16 vals = MX scale 因子表 (跳过, 不进 misc)
+FP16_TAIL[229936] = 155936 + B14_MXSCALE_BYTES
 
 
 def decode_record_raw(raw, total_B=None):
@@ -205,19 +216,41 @@ def fill_model(model, by_block, verbose=False, blob_full=None):
             misc_w = misc
         stream = np.concatenate([main, misc_w]) if len(misc_w) else main
         q = 0
+        mlp2_pn = f'{prefix}.mlp.2.weight'
+        q_before_mlp2 = None
         for suffix, shape in (
             ('attn.qkv.weight', None), ('attn.proj.weight', None),
             ('mlp.0.weight', None), ('mlp.2.weight', None),
         ):
             pn = f'{prefix}.{suffix}'
             if pn in pmap:
+                if pn == mlp2_pn:
+                    q_before_mlp2 = q
                 q += put(pn, stream[q:])
+        # Phase 6.5 (Task 7a): c=256 块 (enc3 b15-21) 的 stream 只有 392,720 vals,
+        # 而 mlp.0+mlp.2 共需 196,608 — mlp.2 会拿到 66k 零填充 (病态:
+        # 67% 零 + 少量 hot row, enc3_probe.py 实测)。此处仅对 enc3 检测
+        # mlp.2 是否实际拿到全量数据; 若没拿到, 用 Kaiming (fan_in=hidden)
+        # 兑底, 保证 FFN 第二层幅度健康。其他 stage 行为不变 (最小改动)。
+        if (prefix.startswith('enc.3.') and mlp2_pn in pmap
+                and q_before_mlp2 is not None
+                and len(stream) < q_before_mlp2 + pmap[mlp2_pn].numel()):
+            p = pmap[mlp2_pn]
+            fan_in = p.shape[1]
+            with torch.no_grad():
+                p.normal_(0.0, math.sqrt(1.0 / fan_in))
         tail = stream[q:]
         o = 0
         for suffix in ('norm1.weight', 'norm1.bias', 'norm2.weight', 'norm2.bias',
                        'mlp.0.bias', 'mlp.2.bias', 'attn.qkv.bias', 'attn.proj.bias'):
             pn = f'{prefix}.{suffix}'
             if pn in pmap and pn in unfilled:
+                # Phase 6.5 (Task 7a): enc3 (b15-21) 的 stream 在权重段就耗尽,
+                # tail 为空 — 旧行为把 norm gamma 零填充并把块变成近恒等映射
+                # (enc3_probe.py 实测)。此处仅对 enc3 跳过零装填, 留在 unfilled
+                # 集合里让末尾兑底逻辑填 LN canonical 值 (gamma=1, beta=0)。
+                if prefix.startswith('enc.3.') and o >= len(tail):
+                    continue
                 o += put(pn, tail[o:])
 
     # enc/dec SwinStage 内块序
@@ -273,8 +306,20 @@ def fill_model(model, by_block, verbose=False, blob_full=None):
         if b in by_block:
             main, misc = by_block[b]['layer0']
             put(f'merges.{mi}.reduction.weight', main)
-            put(f'merges.{mi}.norm.weight', misc) if len(misc) else None
-            put(f'merges.{mi}.norm.bias', misc) if len(misc) else None
+            # Phase 6.5 (Task 7a): merges.2 的 misc 现在已剥去 MX scale 表
+            # (见 B14_MXSCALE_BYTES), 但 blob 里仍未定位到真实 LN gamma 区段,
+            # 故按 enc3_probe.py 结论用健康带 1.0 兑底 (gamma=1, beta=0),
+            # 避免任何异常幅度进入 LN affine。
+            if mi == 2:
+                with torch.no_grad():
+                    pmap[f'merges.2.norm.weight'].fill_(1.0)
+                    pmap[f'merges.2.norm.bias'].zero_()
+                unfilled.discard(f'merges.2.norm.weight')
+                unfilled.discard(f'merges.2.norm.bias')
+                stats['filled'] += pmap['merges.2.norm.weight'].numel() * 2
+            else:
+                put(f'merges.{mi}.norm.weight', misc) if len(misc) else None
+                put(f'merges.{mi}.norm.bias', misc) if len(misc) else None
     # —— expands (b48,56,62,66) ——
     for ei, b in enumerate((48, 56, 62, 66)):
         if b in by_block:
