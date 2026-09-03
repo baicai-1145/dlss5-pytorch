@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dlss5-pytorch"
+version = "0.1.0"
+description = "Reverse-engineered PyTorch replica of NVIDIA DLSS5 Neural Rendering (DLSS 310.8.0, sm_120)"
+readme = "README.md"
+authors = [{ name = "baicai1145" }]
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24.0,<2.0.0",
+    "torch>=2.0.0",
+    "pillow>=9.0.0",
+]
+
+[project.scripts]
+dlss5-infer = "infer:main"
+dlss5-eval = "evaluate:main"
+
+[tool.setuptools.packages.find]
+include = ["dlss5*"]

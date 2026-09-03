@@ -1,0 +1,5 @@
+# DLSS5 PyTorch Dependencies
+# NOTE: User requirement strictly forbids numpy 2.x; keep pinned to <2.0
+numpy>=1.24.0,<2.0.0
+torch>=2.0.0
+Pillow>=9.0.0
