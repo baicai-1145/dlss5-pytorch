@@ -51,6 +51,7 @@ def parse_args():
     parser.add_argument("--height", type=int, default=1050, help="Native buffer height (default: 1050)")
     parser.add_argument("--crop", nargs=2, type=int, default=None, metavar=("H", "W"), help="Crop center region of size (H, W) for fast preview")
     parser.add_argument("--srgb", action="store_true", help="Apply filmic tone curve and convert linear HDR output to sRGB")
+    parser.add_argument("--calibrate", action="store_true", help="Apply frozen output-head affine calibration (recommended when comparing to official DLL output)")
     parser.add_argument("--save-hdr", default=None, help="Optional path to save raw float32 output as .npy")
     return parser.parse_args()
 
@@ -118,7 +119,7 @@ def main():
 
     print("[DLSS5] Running neural rendering inference...")
     t_inf = time.time()
-    out = dlss5.infer_frame(model, color, depth, motion, device=device)
+    out = dlss5.infer_frame(model, color, depth, motion, device=device, affine_calibrate=args.calibrate)
     dt = time.time() - t_inf
     print(f"[DLSS5] Inference completed in {dt:.2f}s ({out.shape[1]}x{out.shape[0]})")
 

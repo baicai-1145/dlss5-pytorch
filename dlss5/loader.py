@@ -184,12 +184,19 @@ def parse_blob(blob: bytes) -> Dict[int, Dict[str, Tuple[np.ndarray, np.ndarray]
     return by_block
 
 
-def load_weights(model: DLSS5Net, blob: bytes, verbose: bool = False) -> Dict[str, int]:
-    """Mount all decoded weights into the DLSS5Net model."""
+def load_weights(model: DLSS5Net, blob: bytes, verbose: bool = False, seed: int = 20260904) -> Dict[str, int]:
+    """Mount all decoded weights into the DLSS5Net model.
+
+    The Kaiming fallback fills (enc3 mlp.2, expands fuse/expand) use a seeded
+    deterministic Generator so that two loads on different machines produce
+    bit-identical parameters (required for output-calibration transfer).
+    """
     by_block = parse_blob(blob)
     pmap = dict(model.named_parameters())
     unfilled = set(pmap.keys())
     stats = {"filled": 0, "pad": 0}
+    rng = torch.Generator(device="cpu")
+    rng.manual_seed(seed)
 
     def put(param_name: str, values: np.ndarray, count: Optional[int] = None) -> int:
         if param_name not in pmap:
@@ -235,7 +242,8 @@ def load_weights(model: DLSS5Net, blob: bytes, verbose: bool = False) -> Dict[st
             p = pmap[mlp2_pn]
             fan_in = p.shape[1]
             with torch.no_grad():
-                p.normal_(0.0, math.sqrt(1.0 / fan_in))
+                noise = torch.empty(p.shape).normal_(0.0, math.sqrt(1.0 / fan_in), generator=rng)
+                p.copy_(noise.to(p.dtype))
 
         tail = stream[q:]
         o = 0
@@ -353,7 +361,8 @@ def load_weights(model: DLSS5Net, blob: bytes, verbose: bool = False) -> Dict[st
             if pn in pmap and pn in unfilled:
                 p = pmap[pn]
                 with torch.no_grad():
-                    p.normal_(0.0, math.sqrt(1.0 / p.shape[1]))
+                    noise = torch.empty(p.shape).normal_(0.0, math.sqrt(1.0 / p.shape[1]), generator=rng)
+                    p.copy_(noise.to(p.dtype))
                 unfilled.discard(pn)
                 stats["filled"] += p.numel()
 

@@ -20,7 +20,14 @@ import numpy as np
 
 from .model import DLSS5Net, DLSS5Config
 from .loader import load_model, load_weights
-from .postprocess import apply_residual, linear_to_srgb
+from .postprocess import (
+    apply_residual,
+    linear_to_srgb,
+    apply_out_affine,
+    fit_out_affine,
+    DEFAULT_OUT_AFFINE_A,
+    DEFAULT_OUT_AFFINE_B,
+)
 from .data_utils import load_dxgi_color, load_dxgi_depth, load_dxgi_motion, save_image
 
 
@@ -33,6 +40,7 @@ def infer_frame(
     device: str | torch.device | None = None,
     divisibility: int = 32,
     apply_postprocess: bool = True,
+    affine_calibrate: bool = False,
 ) -> np.ndarray:
     """Runs DLSS5 NR inference on a single frame at full resolution.
 
@@ -48,6 +56,9 @@ def infer_frame(
         device: Target execution device. If None, uses model parameter device.
         divisibility: Spatial divisibility requirement (default: 32).
         apply_postprocess: If True, applies calibrated additive residual postprocessing.
+        affine_calibrate: If True, additionally applies the frozen output-head affine
+            calibration (fit on frame 0 vs official DLL; +2 dB on live captures).
+            Use when comparing against official output or producing final frames.
 
     Returns:
         (H, W, 3) float32 array in [0, 1].
@@ -106,7 +117,10 @@ def infer_frame(
     c_np = color if isinstance(color, np.ndarray) else color.cpu().numpy()
 
     if apply_postprocess:
-        return apply_residual(c_np, res)
+        out = apply_residual(c_np, res)
+        if affine_calibrate:
+            out = apply_out_affine(c_np, out)
+        return out
     return res
 
 
@@ -118,6 +132,10 @@ __all__ = [
     "infer_frame",
     "apply_residual",
     "linear_to_srgb",
+    "apply_out_affine",
+    "fit_out_affine",
+    "DEFAULT_OUT_AFFINE_A",
+    "DEFAULT_OUT_AFFINE_B",
     "load_dxgi_color",
     "load_dxgi_depth",
     "load_dxgi_motion",

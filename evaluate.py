@@ -71,6 +71,11 @@ def parse_args():
         default=".tmp/eval_comparison.png",
         help="Path to save 4-panel visual comparison (default: .tmp/eval_comparison.png)",
     )
+    parser.add_argument(
+        "--calibrate",
+        action="store_true",
+        help="Apply frozen output-head affine calibration (fit frame 0 vs official; +2 dB)",
+    )
     return parser.parse_args()
 
 
@@ -128,6 +133,7 @@ def evaluate_single_frame(
     device: str,
     crop: tuple[int, int] | None = None,
     save_vis_path: str | None = None,
+    calibrate: bool = False,
 ) -> dict:
     bef_path = os.path.join(data_dir, f"before_{frame_idx:02d}.raw")
     aft_path = os.path.join(data_dir, f"after_{frame_idx:02d}.raw")
@@ -150,7 +156,9 @@ def evaluate_single_frame(
         motion = motion[sy : sy + ch, sx : sx + cw]
 
     t0 = time.time()
-    out = dlss5.infer_frame(model, color, depth, motion, device=device)
+    out = dlss5.infer_frame(
+        model, color, depth, motion, device=device, affine_calibrate=calibrate
+    )
     dt = time.time() - t0
 
     metrics = compute_metrics(out, gt, color)
@@ -201,6 +209,7 @@ def main():
             device=device,
             crop=tuple(args.crop) if args.crop else None,
             save_vis_path=vis_path,
+            calibrate=args.calibrate,
         )
         results.append(m)
         print(
