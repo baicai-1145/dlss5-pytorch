@@ -2,6 +2,17 @@
 __pycache__/
 *.pyc
 *.pyo
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Environments
+.env
+.venv/
+venv/
 
 # Large binaries (blob / cubins extracted)
 weights_blob.bin
@@ -16,7 +27,15 @@ phase2/cubins/all.bin
 # Misc
 .DS_Store
 *.tgz
+*.log
 
 # Per-phase scratch / caches (memmaps, npz blobs, run logs)
 .tmp/
 phase4/.tmp/
+
+# Test / caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
