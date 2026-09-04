@@ -81,7 +81,10 @@ class _ResidualHead(nn.Module):
         x = x + self.global_fc(self.avgpool(x))
         x = x.permute(0, 2, 3, 1)
         x = self.conv(x.permute(0, 3, 1, 2))
-        return torch.tanh(x) * torch.sigmoid(self.blend)
+        # Official scaling: raw blend coefficient multiplies the tanh residual
+        # directly (no sigmoid). Verified on cap3 clean captures: direct blend
+        # (0.0508) matches official delta DC scale; sigmoid(blend) inflates DC 10x.
+        return torch.tanh(x) * self.blend
 
 
 class _SplitBlock(nn.Module):
