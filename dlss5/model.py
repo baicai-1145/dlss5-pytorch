@@ -20,6 +20,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .blob_budget import STAGE_TARGET, STAGE_ORDER
+from .mp_cubic_silu import mp_cubic_silu
 from .swin_block import SwinStage
 from .patch_ops import PatchMerging, PatchExpanding, UpFuse
 
@@ -115,8 +116,10 @@ class _SplitBlock(nn.Module):
         """x: (B,512,H,W).  Functional placeholder — width-preserving."""
         B, C, H, W = x.shape
         xp = x.permute(0, 2, 3, 1)                      # (B,H,W,512)
-        # ffwd expand 512->2048 (layer4), then wide qkv/proj in 2048 space
-        h = self.ffwd(xp)                                # (B,H,W,2048)
+        # ffwd expand 512->2048 (layer4), clamp(±4)+MpCubicSiLU epilogue on the
+        # wide hidden (SASS: cc_split_swin_16h_ffwd_512_* kernels fuse
+        # GEMM -> clamp+SiLU -> GEMM), then wide qkv/proj in 2048 space
+        h = mp_cubic_silu(self.ffwd(xp))                 # (B,H,W,2048)
         h = self.wqkv(h)                                 # wide qkv (2048)
         h = self.proj(h)                                 # wide proj
         # fold 2048 -> 512 (average 4) to keep width

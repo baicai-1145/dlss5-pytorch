@@ -13,7 +13,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from .mp_cubic_silu import MpCubicSiLU
+from .mp_cubic_silu import MpCubicSiLU, mp_cubic_silu
 
 
 def window_partition(x: torch.Tensor, ws: int) -> torch.Tensor:
@@ -110,7 +110,12 @@ class WindowAttention(nn.Module):
             nW = attn_mask.shape[0]
             attn = attn.view(B // nW, nW, self.heads, N, N) + attn_mask.unsqueeze(1).unsqueeze(0)
             attn = attn.view(-1, self.heads, N, N)
-        attn = attn.softmax(dim=-1)
+        # SASS (cubin_00..05, REPORT_SASS.md §5): the DLL has NO softmax anywhere.
+        # Attention scores are clamped(±4) and passed through MpCubicSiLU, then used
+        # directly as attention weights (no exp/max/sum normalization). Masked
+        # scores (≤ −4) collapse to ≈0 weight since the cubic's `a` term ≈ 0 at
+        # |t| = 4, so the shifted-window mask keeps its semantics.
+        attn = mp_cubic_silu(attn)
         attn = self.attn_drop(attn)
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
         x = self.proj(x)

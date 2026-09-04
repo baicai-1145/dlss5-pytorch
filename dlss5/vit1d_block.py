@@ -16,20 +16,54 @@ import torch.nn.functional as F
 from .mp_cubic_silu import MpCubicSiLU
 
 
+class _CubicSelfAttention(nn.Module):
+    """Self-attention with the official score activation: clamp(±4) + MpCubicSiLU,
+    no softmax (SASS: no exp/max/sum anywhere in the DLL).
+
+    Parameter names deliberately match nn.MultiheadAttention
+    (in_proj_weight / in_proj_bias / out_proj.weight / out_proj.bias) so any
+    weight mapping written against MHA stays valid.
+    """
+
+    def __init__(self, dim: int, heads: int):
+        super().__init__()
+        assert dim % heads == 0
+        self.heads = heads
+        self.head_dim = dim // heads
+        self.scale = self.head_dim ** -0.5
+        self.in_proj_weight = nn.Parameter(torch.empty(3 * dim, dim))
+        self.in_proj_bias = nn.Parameter(torch.zeros(3 * dim))
+        self.out_proj = nn.Linear(dim, dim)
+        nn.init.xavier_uniform_(self.in_proj_weight)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, N, D = x.shape
+        qkv = F.linear(x, self.in_proj_weight, self.in_proj_bias)
+        q, k, v = qkv.chunk(3, dim=-1)
+        q = q.view(B, N, self.heads, self.head_dim).transpose(1, 2)
+        k = k.view(B, N, self.heads, self.head_dim).transpose(1, 2)
+        v = v.view(B, N, self.heads, self.head_dim).transpose(1, 2)
+        attn = (q * self.scale) @ k.transpose(-2, -1)   # scores
+        attn = mp_cubic_silu(attn)                      # clamp(±4) + cubic, no softmax
+        out = (attn @ v).transpose(1, 2).reshape(B, N, D)
+        return self.out_proj(out)
+
+
 class ViT1DBlock(nn.Module):
-    """Standard pre-LN transformer encoder block (norm -> MSA -> res, norm -> MLP -> res)."""
+    """Pre-LN transformer block with the official cubic-score attention
+    (norm -> MSA -> res, norm -> MLP -> res)."""
 
     def __init__(self, dim: int, heads: int, mlp_ratio: float = 4.0):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
-        self.attn = nn.MultiheadAttention(dim, heads, batch_first=True)
+        self.attn = _CubicSelfAttention(dim, heads)
         self.norm2 = nn.LayerNorm(dim)
         hidden = int(dim * mlp_ratio)
         self.ffn = nn.Sequential(
             nn.Linear(dim, hidden), MpCubicSiLU(), nn.Linear(hidden, dim))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = x + self.attn(self.norm1(x), self.norm1(x), self.norm1(x), need_weights=False)[0]
+        x = x + self.attn(self.norm1(x))
         x = x + self.ffn(self.norm2(x))
         return x
 
