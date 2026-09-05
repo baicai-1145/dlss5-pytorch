@@ -67,3 +67,30 @@ kernels — i.e. what resource the MV-bicubic residual actually samples.
 - 0x6e → neither (a third buffer, e.g. DLSS-internal ping-pong): log dims
   + pointer provenance and bring the numbers back; that would open a new
   lane (internal accumulation buffer) — new round needed.
+
+## UPDATE (Windows recon): probe_queue path + bin format
+
+- Queue dir: `C:/Control.Ultimate.Edition.v517.915/probe_queue/`; OptiScaler
+  source (ff20fe47) at the game dir `.tmp/OptiScaler_DLSSNR/`.
+- Existing bin sizes prove COLOR-ONLY packing: comb 32MB = 2 frames,
+  grayramp 16MB = 1, impulse 258MB = 16, reset 129MB = 8 — exactly
+  `16 bytes header + frames × 1920×1050×8 B` (RGBA16F). Header:
+  `<u32 magic 0x31425250 'PRB1'><u32 W><u32 H><u32 frameCount>` then
+  raw half-float frames. Depth/motion are NOT in the bin (game-side).
+- **Probes therefore use TEMPORAL DISPLACEMENT** (pattern jumps between
+  frames, game motion ≈ 0 on a frozen scene) instead of MV injection:
+  - `capP3_impulse.bin` (4f): 8×8 dot (cx,cy) on f0 → (cx+64,cy) on f1-3.
+    Ghost dot at the OLD position in the delta = H_B; new-position-only
+    = H_A. Reset frame (f0) clean for both.
+  - `capP2_edge.bin` (4f): vertical edge x=960 → x=1024. Ghost edge at
+    the old position = H_B; band-width measurement for free.
+  - `capP1_dc.bin` (2f): gray 0.25 → 0.75 DC step; gate/baseline calib.
+- Generator (Mac/3090 side, produces the .bin files):
+  `.tmp/gen_probe_mvmotion.py` — run, then drop the three bins into
+  `probe_queue/` (one per capture session, per the queue's one-item-per-
+  run semantics) and rename each dump dir `capP3_impulse` / `capP2_edge`
+  / `capP1_dc`.
+- Pending: Windows pi is confirming the exact frame-packing layout from
+  the ff20fe47 source (color-only vs interleaved planes); if it differs
+  from the PRB1 header+RGBA16F plan above, the generator gets a small
+  packer patch — the PATTERNS themselves are layout-independent.
