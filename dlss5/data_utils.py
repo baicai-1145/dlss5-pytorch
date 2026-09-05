@@ -30,7 +30,15 @@ def load_dxgi_depth(path: str, width: int = 1920, height: int = 1050) -> np.ndar
     """
     if not os.path.isfile(path):
         raise FileNotFoundError(f"Depth buffer file not found: {path}")
-    u = np.fromfile(path, dtype=np.uint32).reshape(height, width)
+    raw = np.fromfile(path, dtype=np.uint32)
+    try:
+        u = raw.reshape(height, width)
+    except ValueError:
+        # stride-padded buffer (e.g. rowPitch 4096B = 1024 u32 per row)
+        stride = len(raw) // height
+        if stride < width:
+            raise
+        u = np.stack([raw[i * stride : i * stride + width] for i in range(height)])
     r11 = (u & 0x7FF).astype(np.uint16)
     e = (r11 >> 6) & 0x1F
     m = r11 & 0x3F
@@ -55,7 +63,15 @@ def load_dxgi_motion(
     """
     if not os.path.isfile(path):
         raise FileNotFoundError(f"Motion buffer file not found: {path}")
-    m = np.fromfile(path, dtype="<f2").reshape(height, width, 2).astype(np.float32)
+    raw = np.fromfile(path, dtype="<f2")
+    try:
+        m = raw.reshape(height, width, 2).astype(np.float32)
+    except ValueError:
+        stride = len(raw) // height
+        if stride < width * 2:
+            raise
+        m = np.stack([raw[i * stride : i * stride + width * 2].reshape(width, 2)
+                      for i in range(height)]).astype(np.float32)
     scale_arr = np.array([scale[0], scale[1]], dtype=np.float32)
     return m * scale_arr
 
