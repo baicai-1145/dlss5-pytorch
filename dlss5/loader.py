@@ -448,6 +448,13 @@ def load_weights(model: DLSS5Net, blob: bytes, verbose: bool = False, seed: int 
         62: dict(misc=(49152, 66048), fuse=(66048, 69632), bias=(69632, 69728), c=64),
         66: dict(misc=(13312, 21504), fuse=(11264, 13312), bias=(22716, 22780), c=32),
     }
+    # R18 ablation knob: env-overridable fuse byte zones ("start:end" per block)
+    for _b in (48, 56, 62, 66):
+        _ov = os.environ.get(f"DLSS5_UPFUSE_ZONE_B{_b}")
+        if _ov:
+            _a, _e = _ov.split(":")
+            UP_ZONES[_b]["fuse"] = (int(_a), int(_e))
+
     _UPB = {48: 0, 56: 1, 62: 2, 66: 3}
     for b, ei in _UPB.items():
         z = UP_ZONES.get(b)
