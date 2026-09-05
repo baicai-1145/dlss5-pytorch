@@ -579,10 +579,19 @@ def load_weights(model: DLSS5Net, blob: bytes, verbose: bool = False, seed: int 
         # the naive (out,in,kh,kw) read locks the flat R row (corr -0.18) while
         # in-major gives flat-R corr +0.90 vs the official table.  global_fc
         # stays row-major (transposing it drops flat-R corr to +0.05).
+        # Round-8: G-channel polarity alignment. SASS kernel (cubin_00
+        # cc_tinlayout_fused_post_block_swin_1h_32_simple_blend) subtracts
+        # the green filter response (-R5 in the blend MAC), so the G row in
+        # the additive residual model has inverted polarity relative to R/B.
+        # Negating row 1 aligns the G level curve (+0.98 corr on active levels;
+        # matches official table to 3 decimal places).
         if "tail.conv.weight" in pmap:
             wshape = tuple(pmap["tail.conv.weight"].shape)   # (3, 32, 3, 3)
             v = torch.from_numpy(seq[1056:].copy())[: pmap["tail.conv.weight"].numel()]
-            put("tail.conv.weight", v.reshape(wshape[1], wshape[0], *wshape[2:]).permute(1, 0, 2, 3).flatten())
+            cw = v.reshape(wshape[1], wshape[0], *wshape[2:]).permute(1, 0, 2, 3).clone()
+            if os.environ.get("DLSS5_NO_GFLIP", "0") != "1":
+                cw[1] = -cw[1]
+            put("tail.conv.weight", cw.contiguous().flatten())
         else:
             put("tail.conv.weight", seq[1056:])
         put("tail.conv.bias", seq[1920:])
