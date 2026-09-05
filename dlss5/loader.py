@@ -589,5 +589,29 @@ def load_model(
         blob_bytes = f.read()
 
     load_weights(model, blob_bytes, verbose=verbose)
+
+    # Decode-artifact hygiene: c256/c512 mlp.2 fp16-band slices end inside the
+    # tail gamma region, so the last output-channel row of those matrices is
+    # gamma-range data (~0.58) vs ~0.002 for real rows (verified: exactly the
+    # enc.3/dec.1 outlier channels, e.g. ch255 max|o|=1159).  Zero any mlp.2
+    # row >20x the row-median magnitude.  DLSS5_NO_M2CLEAN=1 disables.
+    if os.environ.get("DLSS5_NO_M2CLEAN", "0") != "1":
+        import torch
+        with torch.no_grad():
+            nz = 0
+            for pn, p in model.named_parameters():
+                if p.dim() >= 2 and p.shape[0] >= 16 and ".mlp.2.weight" in pn:
+                    r = p.reshape(p.shape[0], -1)
+                    rm = r.abs().mean(dim=1)
+                    med = rm.median()
+                    if med > 0:
+                        bad = (rm > 20 * med).nonzero().flatten()
+                        if bad.numel():
+                            for b in bad:
+                                r[b].zero_()
+                            nz += int(bad.numel())
+        if verbose:
+            print(f"[loader] mlp.2 garbage-row hygiene: zeroed {nz} rows")
+
     model.to(device)
     return model

@@ -28,9 +28,11 @@ class TestDLSS5(unittest.TestCase):
 
     def test_mx_decoding(self):
         """Test numeric decoding of E4M3, FP16, and MXFP8 routines."""
-        # E4M3 tests
+        # E4M3 tests (DLSS5_E4_SCALE pinned to 1.0 for raw-format check)
         raw_e4 = np.array([0x00, 0x38, 0x7F, 0x80], dtype=np.uint8)
+        os.environ["DLSS5_E4_SCALE"] = "1.0"
         decoded = e4m3_decode(raw_e4)
+        os.environ["DLSS5_E4_SCALE"] = "0.25"
         self.assertEqual(len(decoded), 4)
         self.assertAlmostEqual(decoded[0], 0.0, places=5)
         self.assertAlmostEqual(decoded[1], 1.0, places=5)
