@@ -474,6 +474,12 @@ def load_weights(model: DLSS5Net, blob: bytes, verbose: bool = False, seed: int 
                 unfilled.discard(pn)
                 stats["filled"] += p.numel()
 
+    # PatchExpanding neutral-init experiment (NN-identity expand) made things
+    # WORSE (expands.0 46.5->77.5, dec.1 50.7->123.5, output went garbage
+    # dRGB -0.5): the coherent copies sum through the real fuse GEMM.  The
+    # Kaiming fallback below stays; dec.1's heat was traced to the enc.3 skip
+    # (outlier channels, max 1352), not the up-path.
+
     # Bottleneck (b31-38): _SplitBlock
     for bi, b in enumerate(range(31, 39)):
         if b in by_block:
