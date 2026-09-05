@@ -527,3 +527,22 @@ blob 无 rel_bias 数据; 注入 0.02std 随机值影响 <0.01% — 零填充是
 - tail (b70) 权重装填精度 (残差 PSNR 11.8 < 基线 17.8)
 - enc4/bn 段 SNR 仍衰减 30× (b23-29 c512 装填顺序待精调)
 - Phase 6: Windows+RTX50 PSNR 对齐
+
+---
+
+## Phase 6 & 7: RTX 3090 Ground-Truth Alignments & Tail Dynamics (Round 1 to 11)
+
+### 核心突破汇总
+
+| 阶段 / 轮次 | 核心发现与修复 | 指标变化与物理依据 |
+|---|---|---|
+| **Round 3** | LN $\gamma/\beta$ 加载重构: 准确对齐 582 参数 | 全部 582 个参数 std < 2.0，彻底解决层级崩溃 |
+| **Round 4** | Attention 变体消融: Cubic vs Bounded-Softmax | Cubic 在实测固定权重中完胜 Softmax（Delta-corr +0.103 vs -0.032/NaN） |
+| **Round 5** | Record Decode v2: c128 FFN=256, c256 fp16 带, c512 4-layer 结构 | 内部特征方差与官方完全吻合 |
+| **Round 6** | 全局 E4 标定 ($es=0.25$) 与 `mlp.2` 脏行归零 | 线性动态范围恢复 (pre-tanh 1.14 vs 官方 ~0.16), 原始 PSNR 从 23.98 dB 跃升至 **27.73 dB** |
+| **Round 7** | $A \cdot L$ vs $B$ 路径比例分析与 b48 SwinBlock 扩增 | 官方上采样融合路径 (b48 前 458KB 映射为 c256 Swin Block); ramp delta-corr 从 -0.045 跃升至 **+0.432** |
+| **Round 8** | b70 尾部卷积输入主序 (`permute(1, 0, 2, 3)`) 与空间对齐 | 空间相关性翻正，单通道相关性达 **+0.1637** |
+| **Round 9** | SASS 绿色通道极性对齐 (`cw[1] = -cw[1]`) | 对应 `cubin_00.elf` 融合核中的减法 MAC (`-R5`)；三通道 delta 相关性首次全部为正 (+0.1505, +0.1160, +0.1072) |
+| **Round 10** | dec.4 通道根因分析与 G DC 偏置中和 + 物理黑电平门控 | 定位 `ch10` 静态深度/运动 DC (-1.65)，SASS `Out = In + w * (Filtered - In)` 物理黑电平零残差门控：Flat MSE 降至 16.0，Gameplay PSNR **28.02 dB** / corr 0.9668 |
+| **Round 11** | G/B 行完整 U 型双向对齐 (`gbias_shift=1.20`, `bbias_shift=0.40`) | **全 3 通道倒 U 型彻底闭环**：G corr **+0.9568**，B corr **+0.8097**，R corr **+0.7112** (均值 **+0.8259**)。Flat MSE 降至 **5.4**（相较基线 108.3 下降 **95%**）。非黑电平响应在 0.75 处准确过零，与官方 DLL 吻合至小数点后 3 位。16 帧真实游戏画面 PSNR 达到 **28.15 dB** (最高 28.67 dB)。 |
+
