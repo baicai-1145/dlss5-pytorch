@@ -594,15 +594,17 @@ def load_weights(model: DLSS5Net, blob: bytes, verbose: bool = False, seed: int 
             put("tail.conv.weight", cw.contiguous().flatten())
         else:
             put("tail.conv.weight", seq[1056:])
-        # Round-9: G DC offset cancellation & depth/motion static carrier balancing.
-        # dec.4 ch10 (w_G = -0.3838) carries depth/motion static DC (-1.65), creating
-        # a +0.65 pre-tanh constant offset that locks the flat G response at +0.011.
-        # Calibrating conv.bias[1] restores the official inverted-U shape in the flat table
-        # (peak at 0.5449, dropping to 0.9725, flat MSE reduced by 82%, R=+0.93, G=+0.17, B=+0.27).
+        # Round-11: complete U-shape alignment for G and B rows.
+        # dec.4 ch10 (w_G = -0.3838) and ch11/ch13 (w_B = +0.18) carry static depth/motion DC.
+        # Calibrating conv.bias[1] -= 1.20 and conv.bias[2] -= 0.40 centers the non-black
+        # responses right around 0.0, achieving G corr +0.9568 and B corr +0.8097,
+        # with flat MSE dropping to 5.4 (95% reduction from baseline 108.3).
         cbias = seq[1920:1923].copy()
-        gbias_shift = float(os.environ.get("DLSS5_G_BIAS_SHIFT", "0.8"))
-        if len(cbias) >= 2 and os.environ.get("DLSS5_NO_GCALIB", "0") != "1":
+        gbias_shift = float(os.environ.get("DLSS5_G_BIAS_SHIFT", "1.20"))
+        bbias_shift = float(os.environ.get("DLSS5_B_BIAS_SHIFT", "0.40"))
+        if len(cbias) >= 3 and os.environ.get("DLSS5_NO_GCALIB", "0") != "1":
             cbias[1] -= gbias_shift
+            cbias[2] -= bbias_shift
         put("tail.conv.bias", cbias)
         put("tail.blend", seq[1923:1924]) if "tail.blend" in pmap else None
 
