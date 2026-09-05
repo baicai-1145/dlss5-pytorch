@@ -575,7 +575,16 @@ def load_weights(model: DLSS5Net, blob: bytes, verbose: bool = False, seed: int 
         seq = np.concatenate([allv, np.zeros(64, np.float32)])
         put("tail.global_fc.weight", seq)
         put("tail.global_fc.bias", seq[1024:])
-        put("tail.conv.weight", seq[1056:])
+        # Round-7: the DLL stores the tail 3x3 conv INPUT-MAJOR ([in][out][kh][kw]);
+        # the naive (out,in,kh,kw) read locks the flat R row (corr -0.18) while
+        # in-major gives flat-R corr +0.90 vs the official table.  global_fc
+        # stays row-major (transposing it drops flat-R corr to +0.05).
+        if "tail.conv.weight" in pmap:
+            wshape = tuple(pmap["tail.conv.weight"].shape)   # (3, 32, 3, 3)
+            v = torch.from_numpy(seq[1056:].copy())[: pmap["tail.conv.weight"].numel()]
+            put("tail.conv.weight", v.reshape(wshape[1], wshape[0], *wshape[2:]).permute(1, 0, 2, 3).flatten())
+        else:
+            put("tail.conv.weight", seq[1056:])
         put("tail.conv.bias", seq[1920:])
         put("tail.blend", seq[1923:1924]) if "tail.blend" in pmap else None
 
