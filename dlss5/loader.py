@@ -213,6 +213,51 @@ def load_weights(model: DLSS5Net, blob: bytes, verbose: bool = False, seed: int 
         stats["filled"] += n
         return n
 
+    def _put_norm(pn: str, vals: Optional[np.ndarray], kind: str) -> bool:
+        """Fill a LayerNorm param from extracted misc values (None = leave default)."""
+        if pn not in pmap or pn not in unfilled:
+            return False
+        p = pmap[pn]
+        if vals is None or len(vals) < p.numel():
+            return False
+        with torch.no_grad():
+            p.copy_(torch.from_numpy(np.asarray(vals[: p.numel()], np.float32)).reshape(p.shape).to(p.dtype))
+        unfilled.discard(pn)
+        stats["filled"] += p.numel()
+        return True
+
+    def _extract_norms(misc: np.ndarray, c: int):
+        """Extract LN gamma/beta from a block's misc stream.
+
+        Verified blob layout (cross-block corr +0.5..+0.95 on gamma slices):
+          misc[0:8]      header (zeros)
+          misc[8:8+c]    norm1 gamma  (mean ~0.9, std ~0.08)
+          misc[8+c:8+2c] norm1 beta   (mean ~0, std ~0.01)
+          misc[L-2c-6:L-c-6] norm2 beta (mean ~0)
+          misc[L-c-6:L-6]    norm2 gamma (mean ~0.9)
+          misc[L-6:]     trailer
+        """
+        L = len(misc)
+        g1 = b1 = b2 = g2 = None
+        if L >= 8 + 2 * c:
+            g1 = misc[8 : 8 + c]
+            b1 = misc[8 + c : 8 + 2 * c]
+        if L >= 2 * c + 6:
+            b2 = misc[L - 2 * c - 6 : L - c - 6]
+            g2 = misc[L - c - 6 : L - 6]
+
+        def gamma_ok(v):
+            if v is None:
+                return False
+            return 0.55 <= float(np.mean(v)) <= 1.30 and float(np.std(v)) <= 0.22
+
+        return (
+            g1 if gamma_ok(g1) else None,
+            b1,
+            b2,
+            g2 if gamma_ok(g2) else None,
+        )
+
     def fill_swin(prefix: str, main: np.ndarray, misc: np.ndarray):
         if len(misc) > 40000:
             misc_w = np.concatenate([misc[len(misc) - 8208 :], misc[256:24320]])
@@ -232,6 +277,15 @@ def load_weights(model: DLSS5Net, blob: bytes, verbose: bool = False, seed: int 
             put(pn, stream[q : q + need])
             q += need
 
+        # LN gamma/beta from the verified misc layout (explicit extraction;
+        # the old tail-consumption left 6/10 stages with all-zero or default norms)
+        n1w = pmap[f"{prefix}.norm1.weight"].numel() if f"{prefix}.norm1.weight" in pmap else 0
+        g1, b1, b2, g2 = _extract_norms(misc, int(n1w) if n1w else 0)
+        _put_norm(f"{prefix}.norm1.weight", g1, "gamma1")
+        _put_norm(f"{prefix}.norm1.bias", b1, "beta1")
+        _put_norm(f"{prefix}.norm2.weight", g2, "gamma2")
+        _put_norm(f"{prefix}.norm2.bias", b2, "beta2")
+
         # enc3 mlp.2 zero-pad refill with Kaiming (COMBINED-C fix)
         if (
             prefix.startswith("enc.3.")
@@ -248,7 +302,6 @@ def load_weights(model: DLSS5Net, blob: bytes, verbose: bool = False, seed: int 
         tail = stream[q:]
         o = 0
         for suffix in (
-            "norm1.weight", "norm1.bias", "norm2.weight", "norm2.bias",
             "mlp.0.bias", "mlp.2.bias", "attn.qkv.bias", "attn.proj.bias",
         ):
             pn = f"{prefix}.{suffix}"
@@ -296,15 +349,29 @@ def load_weights(model: DLSS5Net, blob: bytes, verbose: bool = False, seed: int 
                         if (len(s1) or len(s3))
                         else np.zeros(0)
                     )
-                    for suffix in ("norm1.weight", "norm1.bias", "norm2.weight", "norm2.bias"):
-                        pn = f"{prefix}.{suffix}"
-                        if pn in pmap and pn in unfilled and len(misc_all):
-                            put(pn, misc_all)
+                    # c512: only one gamma stream is present in the blob
+                    # (misc_all ~ [gamma 512]); gamma2/beta are NOT in the blob.
+                    # norm weights get the gamma stream; norm biases must be 0
+                    # (they previously received gamma values -> false DC).
+                    _put_norm(f"{prefix}.norm1.weight", misc_all[:512] if len(misc_all) else None, "gamma1")
+                    _put_norm(f"{prefix}.norm2.weight", misc_all[:512] if len(misc_all) else None, "gamma2")
+                    if f"{prefix}.norm1.bias" in pmap and f"{prefix}.norm1.bias" in unfilled:
+                        with torch.no_grad():
+                            pmap[f"{prefix}.norm1.bias"].zero_()
+                        unfilled.discard(f"{prefix}.norm1.bias")
+                        stats["filled"] += pmap[f"{prefix}.norm1.bias"].numel()
+                    if f"{prefix}.norm2.bias" in pmap and f"{prefix}.norm2.bias" in unfilled:
+                        with torch.no_grad():
+                            pmap[f"{prefix}.norm2.bias"].zero_()
+                        unfilled.discard(f"{prefix}.norm2.bias")
+                        stats["filled"] += pmap[f"{prefix}.norm2.bias"].numel()
                     pn = f"{prefix}.mlp.2.bias"
                     if pn in pmap and pn in unfilled:
-                        bias_src = misc_all[512:1024] if len(misc_all) >= 1024 else misc_all
-                        if len(bias_src) >= 512:
-                            put(pn, bias_src[:512])
+                        # mlp.2.bias lives AFTER the gamma stream; the blob only
+                        # carries the gamma stream for c512, so leave default 0
+                        # unless a separate 512-value region is present.
+                        if len(misc_all) >= 1024:
+                            put(pn, misc_all[512:1024])
                 else:
                     main, misc = layers["layer0"]
                     fill_swin(f"{net}.{si}.blocks.{bi}", main, misc)
