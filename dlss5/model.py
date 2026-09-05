@@ -184,7 +184,19 @@ class DLSS5NetCalib(nn.Module):
                                         cfg["ln_mode"], cfg["rel_bias"]))
             if i < len(dec) - 1:
                 lo = dec[i + 1][0]
-                self.expands.append(UpFuse(dim, lo))
+                up_stage = None
+                if i == 0:
+                    # Round-6 H2: the official up record b48 = swin(c256) +
+                    # fuse(2c^2) + gamma/beta.  Mirror dec.1's calibrated block
+                    # flags; zero-init = identity until the loader fills b48.
+                    up_stage = _swin_stage(256, 1, 8, FFN_H[256],
+                                           cfg["qkv_bias"], cfg["proj_bias"],
+                                           cfg["ffn1_bias"], cfg["ffn2_bias"],
+                                           cfg["ln_mode"], cfg["rel_bias"])
+                    with torch.no_grad():
+                        for p_ in up_stage.parameters():
+                            p_.zero_()
+                self.expands.append(UpFuse(dim, lo, up_stage=up_stage))
         self.tail = _ResidualHead(32, 3, 21810)
         # global calibration pad: absorb (blob_total - model_total) so that total
         # parameters == 147,683,760 exactly (byte-accurate skeleton; Phase 4 maps

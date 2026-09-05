@@ -96,11 +96,18 @@ class UpFuse(nn.Module):
     skip path (this is what restores dec1 input dependence).
     """
 
-    def __init__(self, in_dim: int, out_dim: int):
+    def __init__(self, in_dim: int, out_dim: int, up_stage=None):
         super().__init__()
         self.norm = nn.LayerNorm(in_dim)
         self.expand = nn.Linear(in_dim, 4 * out_dim, bias=False)
         self.fuse = nn.Linear(2 * out_dim, out_dim, bias=True)
+        # Round-6 (H2): b48's front 458752 bytes = a complete c256 swin block
+        # (qkv 196608 + proj 65536 + mlp0 98304 + mlp2 98304 = the SAME
+        # internal layout as the dec-stage c256 records), i.e. the official
+        # up path runs a swin block on the upsampled c256 features BEFORE the
+        # fuse GEMM: up = swin(c) + 2c^2 + yc.  Zero-initialised -> exact
+        # identity until the loader fills it from b48.
+        self.up_stage = up_stage
 
     def forward(self, x: torch.Tensor, sk: Optional[torch.Tensor] = None) -> torch.Tensor:
         """x: (B, C, H, W); sk: skip at (B, out_dim, 2H, 2W) or None.
@@ -113,6 +120,8 @@ class UpFuse(nn.Module):
         x = self.expand(x)                        # (B, H, W, 4*out)
         x = x.permute(0, 3, 1, 2)                 # (B, 4*out, H, W)
         x = F.pixel_shuffle(x, 2)                 # (B, out, 2H, 2W)
+        if self.up_stage is not None:
+            x = self.up_stage(x)
         if sk is None:
             return x
         if x.shape[2:] != sk.shape[2:]:

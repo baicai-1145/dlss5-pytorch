@@ -442,7 +442,8 @@ def load_weights(model: DLSS5Net, blob: bytes, verbose: bool = False, seed: int 
     # (expands.0 mean|o| 46.5 -> 65.5); reverted to the phase-6.6 zone.
     # The fuse GEMM's true semantics/order remain unresolved (round 3 item).
     UP_ZONES = {
-        48: dict(misc=(491520, 820224), fuse=(360448, 491520), bias=(820224, 820736), c=256),
+        48: dict(misc=(458752, 491520), fuse=(524288, 655360), bias=(820224, 820736), c=256,
+                 upswin=(0, 458752)),
         56: dict(misc=(131072, 229888), fuse=(98304, 131072), bias=(229888, 230112), c=128),
         62: dict(misc=(49152, 66048), fuse=(66048, 69632), bias=(69632, 69728), c=64),
         66: dict(misc=(13312, 21504), fuse=(11264, 13312), bias=(22716, 22780), c=32),
@@ -464,15 +465,51 @@ def load_weights(model: DLSS5Net, blob: bytes, verbose: bool = False, seed: int 
             if fb in pmap and len(bias_v) >= pmap[fb].numel():
                 put(fb, bias_v[: pmap[fb].numel()])
 
+        # Round-6 H2: b48's front = the up-path c256 swin block (same internal
+        # layout as the dec-stage c256 records: qkv 196608 + proj 65536 +
+        # mlp0 98304 + mlp2 98304, all E4; gamma/beta in the fp16 band right
+        # after).  fill_swin handles weights + norms + biases in one go.
+        if "upswin" in z:
+            up_pn = f"expands.{ei}.up_stage.blocks.0"
+            if f"{up_pn}.attn.qkv.weight" in pmap:
+                a0, a1 = z["upswin"]
+                m48 = e4m3_decode(arr[a0:a1])
+                fp0, fp1 = z["misc"]
+                misc48 = fp16_decode(arr[fp0:fp1])
+                fill_swin(up_pn, m48, misc48)
+
     for ei in range(4):
-        for pn in (f"expands.{ei}.fuse.weight", f"expands.{ei}.expand.weight"):
-            if pn in pmap and pn in unfilled:
-                p = pmap[pn]
-                with torch.no_grad():
+        pn = f"expands.{ei}.expand.weight"
+        if pn in pmap and pn in unfilled:
+            p = pmap[pn]
+            with torch.no_grad():
+                if os.environ.get("DLSS5_EXPAND_MODE", "nn") == "nn":
+                    # Round-6: with the round-5 E4-scale calibration in place
+                    # (feature stack no longer O(100) hot), the neutral
+                    # nearest-neighbour upsampler is the better placeholder
+                    # for the still-unmapped expand bytes: it carries the
+                    # input's level component (A*L) and real structure into
+                    # the fuse GEMM coherently, while seeded Kaiming noise
+                    # attenuates it ~sqrt(fan_in) and adds DC-free junk.
+                    # (The es=1.0 NN test that failed was in the saturated
+                    # regime; do not compare across regimes.)
+                    out4, in_dim = p.shape          # (4*out_dim, in_dim)
+                    p.zero_()
+                    for c in range(min(in_dim, out4 // 4)):
+                        p[4 * c : 4 * c + 4, c] = 1.0
+                else:
                     noise = torch.empty(p.shape).normal_(0.0, math.sqrt(1.0 / p.shape[1]), generator=rng)
                     p.copy_(noise.to(p.dtype))
-                unfilled.discard(pn)
-                stats["filled"] += p.numel()
+            unfilled.discard(pn)
+            stats["filled"] += p.numel()
+        fz = f"expands.{ei}.fuse.weight"
+        if fz in pmap and fz in unfilled:
+            p = pmap[fz]
+            with torch.no_grad():
+                noise = torch.empty(p.shape).normal_(0.0, math.sqrt(1.0 / p.shape[1]), generator=rng)
+                p.copy_(noise.to(p.dtype))
+            unfilled.discard(fz)
+            stats["filled"] += p.numel()
 
     # PatchExpanding neutral-init experiment (NN-identity expand) made things
     # WORSE (expands.0 46.5->77.5, dec.1 50.7->123.5, output went garbage
