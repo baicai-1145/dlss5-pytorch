@@ -12,6 +12,7 @@ Reverse-engineered from nvngx_dlssnr.dll (leaked DLSS 310.8.0, sm_120 architectu
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
 
@@ -258,7 +259,8 @@ class DLSS5NetCalib(nn.Module):
         # This restores the complete 3-channel inverted-U curve in the flat oracle
         # (R=+0.71, G=+0.61, B=+0.66, MSE=16.0).
         luma = color.mean(dim=1, keepdim=True)
-        out = out * torch.clamp(luma / 0.02, 0.0, 1.0)
+        if os.environ.get("DLSS5_NO_BLACK_GATE", "0") != "1":
+            out = out * torch.clamp(luma / 0.02, 0.0, 1.0)
         return out[:, :, :H0, :W0]
 
     def _fuse_w(self, i, lo):

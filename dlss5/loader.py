@@ -589,9 +589,23 @@ def load_weights(model: DLSS5Net, blob: bytes, verbose: bool = False, seed: int 
             wshape = tuple(pmap["tail.conv.weight"].shape)   # (3, 32, 3, 3)
             v = torch.from_numpy(seq[1056:].copy())[: pmap["tail.conv.weight"].numel()]
             cw = v.reshape(wshape[1], wshape[0], *wshape[2:]).permute(1, 0, 2, 3).clone()
-            if os.environ.get("DLSS5_NO_GFLIP", "0") != "1":
-                cw[1] = -cw[1]
-            put("tail.conv.weight", cw.contiguous().flatten())
+            # Round-12: gameplay-tail convention (DLSS5_TAIL_SIGN="game").
+            # cap3_live gameplay (model_raw deltas) prefers R/B rows negated +
+            # spatial rot_180 with G kept RAW (this is the exact sign-mirror of
+            # the oracle convention): 16-frame pooled 3ch delta-corr +0.3522
+            # (PSNR 28.12 dB, 0 negative frames) at MV U=-0.14 / V=+1.12.
+            # Default ("oracle", empty or anything else) keeps the R9/R11
+            # oracle-matching convention: G flipped, no rot, R/B raw
+            # (flat oracle R=+0.71 G=+0.96 B=+0.81, MSE=5.4).
+            if os.environ.get("DLSS5_TAIL_SIGN", "oracle") == "game":
+                cw[0] = -cw[0]
+                cw[2] = -cw[2]
+                cw = cw.flip(2, 3)
+                put("tail.conv.weight", cw.contiguous().flatten())
+            else:
+                if os.environ.get("DLSS5_NO_GFLIP", "0") != "1":
+                    cw[1] = -cw[1]
+                put("tail.conv.weight", cw.contiguous().flatten())
         else:
             put("tail.conv.weight", seq[1056:])
         # Round-11: complete U-shape alignment for G and B rows.

@@ -14,6 +14,8 @@ Usage:
 """
 from __future__ import annotations
 
+import os
+
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -70,6 +72,14 @@ def infer_frame(
 
     model.eval()
 
+    # Round-12: motion-vector convention. The DLL consumes MVs with split-axis
+    # polarity and a much larger V gain than the legacy 0.02 guess: gameplay
+    # sweep found U=-0.14 / V=+1.12 (on load_dxgi_motion pixel-scaled vectors)
+    # -> pooled 3ch delta-corr +0.3522 (vs +0.07 with 0.02/0.02).
+    mv_u = float(os.environ.get("DLSS5_MV_U_SCALE", "0.02"))
+    mv_v = float(os.environ.get("DLSS5_MV_V_SCALE", "0.02"))
+    mv_gain = torch.tensor([mv_u, mv_v], dtype=torch.float32)
+
     # Convert to tensors
     if isinstance(color, np.ndarray):
         c_t = torch.from_numpy(color.transpose(2, 0, 1)).unsqueeze(0).float()
@@ -86,9 +96,9 @@ def infer_frame(
             d_t = d_t.unsqueeze(0).unsqueeze(0)
 
     if isinstance(motion, np.ndarray):
-        m_t = torch.from_numpy(motion.transpose(2, 0, 1)).unsqueeze(0).float() * 0.02
+        m_t = torch.from_numpy(motion.transpose(2, 0, 1)).unsqueeze(0).float() * mv_gain.view(1, 2, 1, 1)
     else:
-        m_t = motion.float() * 0.02
+        m_t = motion.float() * mv_gain.view(1, 2, 1, 1)
         if m_t.ndim == 3:
             m_t = m_t.permute(2, 0, 1).unsqueeze(0)
 
