@@ -57,6 +57,23 @@ The 147.7MB binary weights blob (`weights_blob.bin`) packages weights across 71 
 
 ---
 
+## Current Status (Round 29)
+
+**Scoreboard (clean 1920×1050, 16 frames, official vs replica)**
+
+| Metric | Official | Ours (pure net) |
+|---|---|---|
+| Pure-network corr (held-out) | — | **+0.393** (zero-expand) |
+| Sharpness @1px | +23.7% over input | **−3.7%** |
+| MS-SSIM / LPIPS (with tone LUT) | — | **0.86525 / 0.2538** (no regression, all dims) |
+
+- Tone/color axes fully closed (corr +0.992, amp 0.93-0.96 with diagnostic LUT; pure-net without LUT is the honest baseline).
+- Sharpness carrier identified in SASS: gated MV-bicubic residual inside `simple_blend` (`out = σ(x_net)·Σwᵢ(mv)·texᵢ(0x6e)/norm − net_raw`, R27/R28 oracle-validated at err 0.00061).
+- **Remaining work**: ① tex `0x6e` runtime binding (H_A input color vs H_B prev net output) — requires Windows frida capture, the ONLY open question; ② real `x_net` gate weights (runtime params, not in blob); ③ generated-texture 2% (needs trained weights, out of scope without training).
+- Structural `DLSS5_TAIL_MODE=full` implements the decoded epilogue (default `simple`); corr-neutral uncalibrated, for structure study only.
+
+---
+
 ## Key Reverse-Engineering Breakthroughs
 
 1. **B14 MX-Scale Leak Fix**: In earlier decoders, an FP16 tail boundary bug leaked a 512-element MX-scale table ($\mu=-8.78$) into `merges.2.norm.weight`, inverting and amplifying feature activations 9×. Restored canonical LayerNorm bounds.

@@ -23,6 +23,15 @@
 - pre_block 含 Box-Muller 高斯合成 (seed×0x9E3779B1 hash+tile 坐标, sin/cos 2π, 3 lane FP16+1.0); 静态注入 hp-corr 封顶 0.05, 已负结果关闭。
 - 官方编辑指纹: 98.2% 能量在 3×3 低通带 = 平滑色调校正场; 高频仅 ~2% (生成式纹理, 需训练过的权重, 静态不可伪造)。
 - cubin_13 = Oklab resolve (cbrt 牛顿迭代), 非噪声门控; σ-gate 假设已排除。
+- cubin_13 = 逐像素 Oklab 域 pow 曲线后处理 (RCP×27/LG2×34/EX2×42, 0×HMMA, 无空间卷积/锐化核), 运行在网络之后消费 outview 4 平面 —— 非锐度算子 (R27 定案)。
+- simple_blend epilogue (R27 SASS 全解, R28 oracle 验证 err 0.00061): out = σ(x_net)·[Σ wᵢ(mv)·texᵢ(0x6e)]/norm − net_raw; MV-bicubic 权重在线计算 (FMUL 链), 六项归一化 (MUFU.RCP), sigmoid 门控 (EX2+RCP); 减法残差在 simple_blend 层级 SASS 实证 (R10 'Out=In−net_out')。
+- outview 4 平面分离写出 (STG.E ×4, 3 color + 1 aux, 基址 c[0x168]) —— 平面布局非交错 RGBA (R27)。
+- pre_block 8-lane 输入图 (R24): 4 tex (RGB+alpha≈depth) + 2 motion + 1 history + 1.0-const; 0x58 = MV 偏移双三次采样当前输入 (无门控=始终绑定), 0x60 = prev_output (指针 NULL 门控 = history lane); R14 'gauss 3 lane' 读法作废待修正。
+- up 分支无 expand-GEMM: 字节实证 (b48 fuse zone 干净带实验更差, R17) + R19 相位 remix ±0.006/sharpE 不变 —— expand 内容非锐度杠杆, zero-expand 最优。
+- b0 = [stem 2592][剩余 19072B 非链路数据] 复合记录, 但 enc.0 = [b1,b2,b3] 映射正确 (R26 off-by-one 证伪: A/B 崩盘 +0.0191 vs +0.3731 + oracle 三位小数双证); b0 剩余区语义开放不阻塞。
+- 未装载区 (10.4MB) = 行为情性辅助数据 (引擎内部反量化尺度表), 非 tap 权重 (R22 五族解码全负); tap 权重只存在于运行时工作区。
+- history 递归: control 槽 blend w=0.25 标定 (R23), lane 结构 REVERSED (R17-B), 混合权重 CALIBRATED; 收益场景运动量依赖 (steady Δ+0.086 vs clean ≈0)。
+- 锐度载体 = 门控 MV-bicubic 残差 (simple_blend 内, R27/R28); 锐度缺口唯一悬案 = tex 0x6e 运行时绑定对象 (H_A 输入色 vs H_B prev 网络输出, oracle 探针运动冻结无法判别, 需 Windows frida) (R28)。
 
 ## 逆向铁律
 - 准确信息必须通过逆向获取 (SASS/记录头/CB/捕获dump), **禁止用猜测或数据拟合替代逆向**。拟合层只允许作诊断罗盘(残差→反推未解码通路), 一律不得作为模型组件交付或长期依赖。
