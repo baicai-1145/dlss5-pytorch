@@ -111,6 +111,45 @@ def decode_record_raw(raw: np.ndarray, total_B: Optional[int] = None) -> Tuple[n
 
     if total_B in FP16_TAIL and FP16_TAIL[total_B]:
         t0 = FP16_TAIL[total_B]
+        if total_B == 197184:
+            # c128 swin record (FFN hidden = 256, weights all E4M3):
+            #   A  [0:98304]        qkv(49152)+proj(16384)+mlp0(32768)  — E4
+            #   F  [98304:98816]    fp16: hdr(8)+gamma1(128)+beta1(120/128)
+            #   B  [98816:131584]   mlp2(32768) — E4 (std 0.0883 == qkv std)
+            #   [131584:196096]     other data (not weights)
+            #   [196096:]           fp16 tail: beta2/gamma2 + trailer
+            main = np.concatenate([
+                e4m3_decode(arr[:98304]),
+                e4m3_decode(arr[98816:131584]),
+            ])
+            misc = [fp16_decode(arr[98304:98832])]
+        elif total_B == 689232:
+            # c256 swin record (FFN hidden = 384):
+            #   A  [0:360448]        qkv(196608)+proj(65536)+mlp0(98304) — E4
+            #   F  [360448:361488]   fp16: hdr(8)+gamma1(256)+beta1(256)
+            #   B  [361488:~557368]  mlp.2 candidate — fp16 band, std 0.0035
+            #                        (≈ mlp.0 std/16; per-tensor scale TBD),
+            #                        ends at a crisp boundary into an E4M3
+            #                        byte band (fp16-hostile, mean −6.5)
+            #   [557368:688640]      other data (E4 bytes + mixed) — not weights
+            #   [688640:]            fp16 tail: beta2/gamma2 + trailer
+            main = np.concatenate([
+                e4m3_decode(arr[:360448]),
+                fp16_decode(arr[361488:557368]),
+            ])
+            misc = [fp16_decode(arr[360448:361488])]
+        else:
+            main = e4m3_decode(arr[:t0])
+            misc = [fp16_decode(arr[t0:])]
+        if total_B in (197184, 689232):
+            # gamma2/beta2 sit at the very end of the final fp16 region so that
+            # misc[L-C-6:L-6] lands exactly on gamma2 (verified for both sizes;
+            # alignment-independent since the trailer keeps 6 values)
+            scan = len(arr) - 512
+            while scan > 0 and _classify_windows(arr[scan : scan + 512])[0] != "F":
+                scan -= 512
+            misc.append(fp16_decode(arr[scan:]))
+            return main, np.concatenate(misc)
         if total_B == 229936:
             return (
                 np.concatenate([
@@ -334,44 +373,43 @@ def load_weights(model: DLSS5Net, blob: bytes, verbose: bool = False, seed: int 
                     continue
                 layers = by_block[b]
                 if len(layers) > 1:
-                    m2, _ = layers.get("layer2", (np.zeros(0), np.zeros(0)))
+                    # c512 4-layer container (B: l0=524288, l1/3=263168, l2=917568):
+                    #   layer2 = qkv 786432 E4 (+65536 MX values after — not qkv)
+                    #   layer0 = [mlp.0 458752 (FH=896, std .044)][other 65532 (std .062)]
+                    #   layer1 = proj candidate 262144 (std .03) + misc(non-gamma)
+                    #   layer3 = mlp.2 row-prefix 262144 (std .010) + misc(GAMMA,
+                    #            cross-block corr +0.84, mean .963; only 256 of 512)
+                    # The old mapping built mlp.2 from m0-tail+MX-zone+m3 mix
+                    # (wrong tensors incl. 448-scale garbage) -> hot stages.
+                    m0 = layers.get("layer0", (np.zeros(0), np.zeros(0)))[0]
                     m1, s1 = layers.get("layer1", (np.zeros(0), np.zeros(0)))
-                    m0, _ = layers.get("layer0", (np.zeros(0), np.zeros(0)))
+                    m2 = layers.get("layer2", (np.zeros(0), np.zeros(0)))[0]
                     m3, s3 = layers.get("layer3", (np.zeros(0), np.zeros(0)))
                     prefix = f"{net}.{si}.blocks.{bi}"
-                    put(f"{prefix}.attn.qkv.weight", m2)
-                    put(f"{prefix}.attn.proj.weight", m1)
-                    mlp_stream = np.concatenate([m0, m2[786432:], m3[:262144]])
-                    put(f"{prefix}.mlp.0.weight", mlp_stream)
-                    put(f"{prefix}.mlp.2.weight", mlp_stream[456704:])
-                    misc_all = (
-                        np.concatenate([x for x in (s1, s3) if len(x)])
-                        if (len(s1) or len(s3))
-                        else np.zeros(0)
+                    put(f"{prefix}.attn.qkv.weight", m2[:786432])
+                    put(f"{prefix}.attn.proj.weight", m1[:262144])
+                    put(f"{prefix}.mlp.0.weight", m0[:456704])
+                    put(f"{prefix}.mlp.2.weight", m3[:262144])
+                    # gamma: layer3.misc (256 verified gamma values) + default ones
+                    gamma512 = (
+                        np.concatenate([s3, np.ones(512 - len(s3), s3.dtype)])
+                        if len(s3) else None
                     )
-                    # c512: only one gamma stream is present in the blob
-                    # (misc_all ~ [gamma 512]); gamma2/beta are NOT in the blob.
-                    # norm weights get the gamma stream; norm biases must be 0
-                    # (they previously received gamma values -> false DC).
-                    _put_norm(f"{prefix}.norm1.weight", misc_all[:512] if len(misc_all) else None, "gamma1")
-                    _put_norm(f"{prefix}.norm2.weight", misc_all[:512] if len(misc_all) else None, "gamma2")
-                    if f"{prefix}.norm1.bias" in pmap and f"{prefix}.norm1.bias" in unfilled:
-                        with torch.no_grad():
-                            pmap[f"{prefix}.norm1.bias"].zero_()
-                        unfilled.discard(f"{prefix}.norm1.bias")
-                        stats["filled"] += pmap[f"{prefix}.norm1.bias"].numel()
-                    if f"{prefix}.norm2.bias" in pmap and f"{prefix}.norm2.bias" in unfilled:
-                        with torch.no_grad():
-                            pmap[f"{prefix}.norm2.bias"].zero_()
-                        unfilled.discard(f"{prefix}.norm2.bias")
-                        stats["filled"] += pmap[f"{prefix}.norm2.bias"].numel()
+                    _put_norm(f"{prefix}.norm1.weight", gamma512, "gamma1")
+                    _put_norm(f"{prefix}.norm2.weight", gamma512, "gamma2")
+                    for nb in ("norm1.bias", "norm2.bias"):
+                        if f"{prefix}.{nb}" in pmap and f"{prefix}.{nb}" in unfilled:
+                            with torch.no_grad():
+                                pmap[f"{prefix}.{nb}"].zero_()
+                            unfilled.discard(f"{prefix}.{nb}")
+                            stats["filled"] += pmap[f"{prefix}.{nb}"].numel()
                     pn = f"{prefix}.mlp.2.bias"
                     if pn in pmap and pn in unfilled:
                         # mlp.2.bias lives AFTER the gamma stream; the blob only
                         # carries the gamma stream for c512, so leave default 0
                         # unless a separate 512-value region is present.
-                        if len(misc_all) >= 1024:
-                            put(pn, misc_all[512:1024])
+                        if len(s3) >= 1024:
+                            put(pn, s3[512:1024])
                 else:
                     main, misc = layers["layer0"]
                     fill_swin(f"{net}.{si}.blocks.{bi}", main, misc)
@@ -400,6 +438,9 @@ def load_weights(model: DLSS5Net, blob: bytes, verbose: bool = False, seed: int 
                 put(f"merges.{mi}.norm.bias", misc) if len(misc) else None
 
     # Expands (b48, 56, 62, 66) with UpFuse 2c^2 fuse GEMM
+    # NOTE: b48 fuse zone tried [524288:655360] (clean E4 band) — WORSE
+    # (expands.0 mean|o| 46.5 -> 65.5); reverted to the phase-6.6 zone.
+    # The fuse GEMM's true semantics/order remain unresolved (round 3 item).
     UP_ZONES = {
         48: dict(misc=(491520, 820224), fuse=(360448, 491520), bias=(820224, 820736), c=256),
         56: dict(misc=(131072, 229888), fuse=(98304, 131072), bias=(229888, 230112), c=128),
