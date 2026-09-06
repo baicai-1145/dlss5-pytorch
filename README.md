@@ -69,8 +69,9 @@ The 147.7MB binary weights blob (`weights_blob.bin`) packages weights across 71 
 
 - Tone/color axes fully closed (corr +0.992, amp 0.93-0.96 with diagnostic LUT; pure-net without LUT is the honest baseline).
 - Sharpness carrier identified in SASS: gated MV-bicubic residual inside `simple_blend` (`out = σ(x_net)·Σwᵢ(mv)·texᵢ(0x6e)/norm − net_raw`, R27/R28 oracle-validated at err 0.00061).
-- **Remaining work**: ① tex `0x6e` runtime binding (H_A input color vs H_B prev net output) — requires Windows frida capture, the ONLY open question; ② real `x_net` gate weights (runtime params, not in blob); ③ generated-texture 2% (needs trained weights, out of scope without training).
-- Structural `DLSS5_TAIL_MODE=full` implements the decoded epilogue (default `simple`); corr-neutral uncalibrated, for structure study only.
+- **0x6e binding CASE CLOSED (R30, H_A = current input color)**: three-fold evidence — (1) P3 impulse-jump frames show NO ghost at the old dot position (H_B's identity-warp carryover absent); (2) P2 edge-jump ghost weaker than ambient control; (3) unbiased replica scoring ties H_A=H_B=0.00056 (the earlier H_B advantage was ground-truth leak via official prev outputs). Dwell-frame deep suppression (−0.08, grows with dwell) flows through the network's internal-state feedback (c[0x60]), not 0x6e.
+- **Remaining work**: ① real `x_net` gate weights (runtime params, not in blob); ② generated-texture 2% (needs trained weights, out of scope without training). Static side is fully exhausted.
+- Structural `DLSS5_TAIL_MODE=full` implements the decoded epilogue (default `simple`); uncalibrated proxy gate collapses held-out corr to −0.096 — structure study only.
 
 ---
 

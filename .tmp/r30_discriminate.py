@@ -38,29 +38,40 @@ dev = "cuda:0"
 
 
 def load_shot(directory):
-    """Load one probe shot: before/model_raw/motion N frames (native res)."""
+    """Load one probe shot: before/model_raw/motion N frames (native res).
+    Windows MV probes are 1920x1080 with the bottom 30 rows zero-padded
+    (capture surface != render res): crop to 1920x1050 after load."""
     manifest = {}
     for line in open(os.path.join(directory, "manifest.txt")):
-        parts = line.split()
-        if parts[0] in ("before", "model_raw", "motion", "depth", "model_input"):
-            manifest[parts[0]] = tuple(int(x) for x in parts[2:6])
+        parts = line.strip().replace("\r", "").split()
+        if len(parts) >= 8 and parts[1] == "width":
+            kv = dict(zip(parts[1::2], parts[2::2]))
+            manifest[parts[0]] = (int(kv["width"]), int(kv["height"]),
+                                  int(kv["format"]), int(kv["rowPitch"]))
     bw, bh = manifest.get("before", (W, H, 0, 0))[:2]
     n = 0
     while os.path.exists(os.path.join(directory, f"model_raw_{n:02d}.raw")):
         n += 1
-    cols = np.stack([ES.load_fp16_rgb(os.path.join(directory, f"before_{i:02d}.raw"), bw, bh)
+    cols = np.stack([ES.load_fp16_rgb(os.path.join(directory, f"before_{i:02d}.raw"), bh, bw)
                      for i in range(n)])
-    raws = np.stack([ES.load_fp16_rgb(os.path.join(directory, f"model_raw_{i:02d}.raw"), bw, bh)
+    raws = np.stack([ES.load_fp16_rgb(os.path.join(directory, f"model_raw_{i:02d}.raw"), bh, bw)
                      for i in range(n)])
+    # capture surface may be taller than the render res (zero-padded rows)
+    if bh > H:
+        cols = cols[:, :H]
+        raws = raws[:, :H]
+        bw, bh = W, H
     mw, mh = manifest.get("motion", (0, 0, 0, 0))[:2]
     mvs = np.stack([dlss5.load_dxgi_motion(os.path.join(directory, f"motion_{i:02d}.raw"),
                                            width=mw, height=mh, scale=(float(mw), float(mh)))
                     for i in range(n)])
+    if mh > H:
+        mvs = mvs[:, :H]
     resets = []
     for line in open(os.path.join(directory, "manifest.txt")):
-        parts = line.split()
-        if parts[0] == "frame":
-            resets.append(int(parts[4]))
+        parts = line.strip().replace("\r", "").split()
+        if parts and parts[0] == "frame" and parts[1] != "s":
+            resets.append(int(parts[5]))
     return cols, raws, mvs, resets, (bw, bh)
 
 
