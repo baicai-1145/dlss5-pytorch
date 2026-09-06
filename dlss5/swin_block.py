@@ -150,6 +150,10 @@ class SwinBlock(nn.Module):
         self.mlp = nn.Sequential(
             nn.Linear(dim, hidden, bias=ffn1_bias), MpCubicSiLU(),
             nn.Linear(hidden, dim, bias=ffn2_bias))
+        # R33: E4M3 activation quantization at tensor-core GEMM inputs
+        # (matches the DLL fp8 path, F2FP.SATFINITE.E4M3 at HMMA input side)
+        from .act_quant import E4M3ActQuant
+        self.actq = E4M3ActQuant()
         self._mask_cache: dict[tuple[int, int, int], torch.Tensor] = {}
 
     def _attn_mask(self, H: int, W: int, device, dtype) -> torch.Tensor | None:
@@ -176,17 +180,23 @@ class SwinBlock(nn.Module):
         shortcut = x
 
         x = self.norm1(x)
+        x = self.actq(x)   # fp8 path: E4M3 quantize before qkv GEMM
         if self.shift_size > 0:
             x = torch.roll(x, shifts=(-self.shift_size, -self.shift_size), dims=(1, 2))
         x = window_partition(x.permute(0, 3, 1, 2), self.ws).view(-1, self.ws * self.ws, C)
         attn_mask = self._attn_mask(hp, wp, x.device, x.dtype)
         x = self.attn(x, attn_mask)
+        x = self.actq(x)   # fp8 path: E4M3 quantize before proj GEMM
         x = window_reverse(x, self.ws, hp, wp, C).permute(0, 2, 3, 1)  # (B, hp, wp, C)
         if self.shift_size > 0:
             x = torch.roll(x, shifts=(self.shift_size, self.shift_size), dims=(1, 2))
         x = shortcut + x
 
-        x = x + self.mlp(self.norm2(x))
+        nx = self.actq(self.norm2(x))   # fp8 path: E4M3 before ffn1 GEMM
+        h = self.mlp[0](nx)
+        h = self.mlp[1](h)
+        h = self.actq(h)               # fp8 path: E4M3 before ffn2 GEMM
+        x = x + self.mlp[2](h)
         if pad_h or pad_w:
             x = x[:, :H, :W, :]
         return x.permute(0, 3, 1, 2)  # (B, C, H, W)
