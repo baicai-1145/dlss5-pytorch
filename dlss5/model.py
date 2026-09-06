@@ -261,33 +261,30 @@ class DLSS5NetCalib(nn.Module):
         luma = color.mean(dim=1, keepdim=True)
         if os.environ.get("DLSS5_NO_BLACK_GATE", "0") != "1":
             out = out * torch.clamp(luma / 0.02, 0.0, 1.0)
-        # ---- R27/R28 full simple_blend epilogue (DLSS5_TAIL_MODE=full) ----
+        # ---- R27/R28/R30 full simple_blend epilogue (DLSS5_TAIL_MODE=full) ----
         # Decoded from cubin_00 simple_blend (lines 2646-2690), validated on
         # the impulse oracle at err 0.00061 (R28):
         #   out = sigma(x_net) * bicubic_warp(MV) - net_raw
         # with in-register MV-bicubic tap weights (SASS FMUL chain), a 6-term
         # normalization (MUFU.RCP), and the sigmoid gate 1/(1+2^(-x*log2e)).
-        # OPEN QUESTION (0x6e binding): whether the bicubic source is the
-        # CURRENT INPUT COLOR (H_A, default here) or the previous NETWORK
-        # OUTPUT (H_B). Oracle probes cannot discriminate (motion-frozen
-        # captures); frida runtime capture required (R28).
+        # 0x6e binding SETTLED (R30, triple evidence): bicubic source = the
+        # CURRENT INPUT COLOR (H_A) — jump-frame ghost absence (P3/P2) +
+        # unbiased replica tie. mvx/mvy here carry the caller-scaled motion
+        # (U=-0.14 / V=+1.12 convention, AGENTS.md).
         if os.environ.get("DLSS5_TAIL_MODE", "simple") == "full":
             mvx, mvy = mvec[:, 0:1], mvec[:, 1:2]
             h, w = out.shape[-2:]
             ys, xs = torch.meshgrid(torch.linspace(-1, 1, h, device=out.device),
                                     torch.linspace(-1, 1, w, device=out.device), indexing="ij")
-            # MV scale: pixel-unit motion (mvec already carries the u/v scale
-            # applied by the caller); warp = current coords + MV
             gx = (xs + mvx[..., 0, :, :]) / w * 2
             gy = (ys + mvy[..., 0, :, :]) / h * 2
             grid = torch.stack([gx, gy], -1)  # (N,H,W,2)
-            src = torch.cat([color, out], 1)  # H_A default: bicubic reads INPUT color
-            # gate from the network's own accumulator (proxy for x_net):
-            # sigmoid of luma-normalized net output magnitude (R27: x_net comes
-            # from the gate-conv HMMA accumulator; we lack its exact weights,
-            # so use the same black-gate luma proxy + amplitude fit).
+            # H_A (R30): bicubic reads the CURRENT INPUT color only.
+            # Gate proxy: x_net's real weights are runtime-only; the proxy
+            # is the luma black-gate scaled by a per-frame-fit-free constant
+            # chosen so the DC scale matches the simple tail (R29: 20.0).
             gate = torch.sigmoid(out.abs().mean(dim=1, keepdim=True) * 20.0) * torch.clamp(luma / 0.02, 0.0, 1.0)
-            warp = F.grid_sample(src[:, :3], grid, mode="bicubic",
+            warp = F.grid_sample(color, grid, mode="bicubic",
                                  padding_mode="border", align_corners=False)
             out = gate * warp - out
         return out[:, :, :H0, :W0]
