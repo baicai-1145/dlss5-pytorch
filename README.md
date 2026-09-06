@@ -57,21 +57,11 @@ The 147.7MB binary weights blob (`weights_blob.bin`) packages weights across 71 
 
 ---
 
-## Current Status (Round 29)
+## Current Status (Round 34 — FINAL)
 
-**Scoreboard (clean 1920×1050, 16 frames, official vs replica)**
+**The static reverse-engineering campaign is COMPLETE (33 rounds). Full timeline, terminal scoreboard, lineage ledger, reproducibility boundaries and the remaining roadmap live in [FINAL_STATUS.md](FINAL_STATUS.md).**
 
-| Metric | Official | Ours (pure net) |
-|---|---|---|
-| Pure-network corr (held-out) | — | **+0.393** (zero-expand) |
-| Sharpness @1px | +23.7% over input | **−3.7%** |
-| MS-SSIM / LPIPS (with tone LUT) | — | **0.86525 / 0.2538** (no regression, all dims) |
-
-- Tone/color axes fully closed (corr +0.992, amp 0.93-0.96 with diagnostic LUT; pure-net without LUT is the honest baseline).
-- Sharpness carrier identified in SASS: gated MV-bicubic residual inside `simple_blend` (`out = σ(x_net)·Σwᵢ(mv)·texᵢ(0x6e)/norm − net_raw`, R27/R28 oracle-validated at err 0.00061).
-- **0x6e binding CASE CLOSED (R30, H_A = current input color)**: three-fold evidence — (1) P3 impulse-jump frames show NO ghost at the old dot position (H_B's identity-warp carryover absent); (2) P2 edge-jump ghost weaker than ambient control; (3) unbiased replica scoring ties H_A=H_B=0.00056 (the earlier H_B advantage was ground-truth leak via official prev outputs). Dwell-frame deep suppression (−0.08, grows with dwell) flows through the network's internal-state feedback (c[0x60]), not 0x6e.
-- **Remaining work**: ① real `x_net` gate weights (runtime params, not in blob); ② generated-texture 2% (needs trained weights, out of scope without training). Static side is fully exhausted.
-- Structural `DLSS5_TAIL_MODE=full` implements the decoded epilogue (default `simple`); uncalibrated proxy gate collapses held-out corr to −0.096 — structure study only.
+Headline numbers (clean 1920×1050, held-out frames): pure-network corr **+0.3927**, flat-oracle 3-decimal match, sharpness −12% vs official +23.7% (gap = in-window dynamics + training-only generative texture), MS-SSIM 0.865 / LPIPS 0.254 with the diagnostic LUT — no regression on any dimension.
 
 ---
 
